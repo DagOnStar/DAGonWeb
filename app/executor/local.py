@@ -83,18 +83,27 @@ def execute_task(task: Any, task_dir: Path, workflow: Workflow) -> str:
     (task_dir / "task.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     if task.task_type == "input":
         value = config.get("value", "")
-        (task_dir / config.get("filename", "input.txt")).write_text(value, encoding="utf-8")
+        filename = str(config.get("filename", "input.txt"))
+        output_path = safe_child(task_dir, filename)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(str(value), encoding="utf-8")
         return "Input materialized."
     if task.task_type == "bash":
         command = config.get("command", "echo hello from DAGonWeb > output.txt")
         completed = subprocess.run(command, shell=True, cwd=task_dir, env=env, text=True, capture_output=True, timeout=int(config.get("timeout", 3600)))
-        return completed.stdout + completed.stderr
+        output = completed.stdout + completed.stderr
+        if completed.returncode:
+            raise RuntimeError(f"Bash task exited with status {completed.returncode}.\n{output}")
+        return output
     if task.task_type == "python":
         script = config.get("script", "from pathlib import Path\nPath('output.txt').write_text('hello from python task')\n")
         script_path = task_dir / "task.py"
         script_path.write_text(script, encoding="utf-8")
         completed = subprocess.run([sys.executable, str(script_path)], cwd=task_dir, env=env, text=True, capture_output=True, timeout=int(config.get("timeout", 3600)))
-        return completed.stdout + completed.stderr
+        output = completed.stdout + completed.stderr
+        if completed.returncode:
+            raise RuntimeError(f"Python task exited with status {completed.returncode}.\n{output}")
+        return output
     if task.task_type == "native":
         module_function = config.get("callable", "")
         (task_dir / "native_result.json").write_text(json.dumps({"callable": module_function, "status": "stubbed"}, indent=2), encoding="utf-8")
