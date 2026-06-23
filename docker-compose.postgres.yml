@@ -1,0 +1,26 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: dagonweb
+      POSTGRES_PASSWORD: dagonweb
+      POSTGRES_DB: dagonweb
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+  dagonweb:
+    build: .
+    environment:
+      SECRET_KEY: change-me
+      DATABASE_URL: postgresql+psycopg2://dagonweb:dagonweb@db:5432/dagonweb
+      SCRATCH_DIR: /scratch/dagonweb
+      ADMIN_EMAIL: admin@example.org
+      ADMIN_PASSWORD: admin12345
+      ADMIN_NAME: DAGonWeb Admin
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./scratch:/scratch/dagonweb
+    depends_on:
+      - db
+volumes:
+  postgres-data:

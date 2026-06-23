@@ -1,0 +1,1 @@
+const CACHE='dagonweb-v1';self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(['/','/static/css/app.css','/static/manifest.webmanifest'])))});self.addEventListener('fetch',e=>{e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})

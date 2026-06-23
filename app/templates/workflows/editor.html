@@ -1,0 +1,14 @@
+{% extends 'base.html' %}{% block title %}{{ workflow.name }} - Editor{% endblock %}{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-2"><div><h1 class="h3 mb-0">{{ workflow.name }}</h1><small class="text-muted">Galaxy-inspired DAGonStar workflow editor</small></div><div><button id="saveGraph" class="btn btn-primary" {% if not editable %}disabled{% endif %}>Save</button><form class="d-inline" method="post" action="{{ url_for('workflows.run_workflow', workflow_id=workflow.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-success">Run</button></form></div></div>
+<div id="editor" data-graph-url="{{ url_for('workflows.graph', workflow_id=workflow.id) }}" data-save-url="{{ url_for('workflows.save_graph', workflow_id=workflow.id) }}" data-csrf="{{ csrf_token() }}" data-editable="{{ '1' if editable else '0' }}">
+  <div id="palette" class="card"><div class="card-header">Task palette</div><div class="list-group list-group-flush">
+    <button class="list-group-item list-group-item-action" data-type="input">Input</button>
+    <button class="list-group-item list-group-item-action" data-type="bash">Bash</button>
+    <button class="list-group-item list-group-item-action" data-type="python">Python</button>
+    <button class="list-group-item list-group-item-action" data-type="native">DAGonStar Native</button>
+    <button class="list-group-item list-group-item-action" data-type="llm">LLM</button>
+  </div><div class="card-body small">Click a task type to place it. Select a source task, then a target task, to create a link and a <code>workflow://</code> relation.</div></div>
+  <div id="workspace"><svg id="links"></svg></div>
+  <div id="inspector" class="card"><div class="card-header">Inspector</div><div class="card-body"><p class="text-muted">Select a task.</p></div></div>
+</div>
+{% endblock %}{% block scripts %}<script src="{{ url_for('static', filename='js/editor.js') }}"></script>{% endblock %}

@@ -1,0 +1,27 @@
+services:
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root-password
+      MYSQL_DATABASE: dagonweb
+      MYSQL_USER: dagonweb
+      MYSQL_PASSWORD: dagonweb
+    volumes:
+      - mysql-data:/var/lib/mysql
+  dagonweb:
+    build: .
+    environment:
+      SECRET_KEY: change-me
+      DATABASE_URL: mysql+pymysql://dagonweb:dagonweb@db:3306/dagonweb
+      SCRATCH_DIR: /scratch/dagonweb
+      ADMIN_EMAIL: admin@example.org
+      ADMIN_PASSWORD: admin12345
+      ADMIN_NAME: DAGonWeb Admin
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./scratch:/scratch/dagonweb
+    depends_on:
+      - db
+volumes:
+  mysql-data:
