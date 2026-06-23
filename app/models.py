@@ -21,6 +21,15 @@ class TaskType(str, Enum):
     LLM = "llm"
     INPUT = "input"
 
+
+TASK_TYPE_LABELS = {
+    TaskType.INPUT.value: "Input",
+    TaskType.BASH.value: "Bash",
+    TaskType.PYTHON.value: "Python",
+    TaskType.NATIVE.value: "DAGonStar Native",
+    TaskType.LLM.value: "LLM",
+}
+
 class RunStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"

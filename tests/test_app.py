@@ -4,7 +4,7 @@ from app.extensions import db
 import pytest
 
 from app.executor.local import execute_task
-from app.models import Role, TaskRun, User, Workflow, WorkflowLink, WorkflowRun, WorkflowTask
+from app.models import TASK_TYPE_LABELS, Role, TaskRun, TaskType, User, Workflow, WorkflowLink, WorkflowRun, WorkflowTask
 from app.workflows.routes import validate_graph_payload
 
 
@@ -27,6 +27,10 @@ def test_seed_creates_admin_and_roles():
 def test_workflow_link_uri_contract():
     link = WorkflowLink(source_uid="a", source_output="output", target_uid="b", target_input="input", workflow_uri="workflow://a/output")
     assert link.to_dict()["workflow_uri"] == "workflow://a/output"
+
+
+def test_every_task_type_has_a_palette_label():
+    assert set(TASK_TYPE_LABELS) == {task_type.value for task_type in TaskType}
 
 
 def test_graph_validation_rejects_cycles_and_unknown_tasks():

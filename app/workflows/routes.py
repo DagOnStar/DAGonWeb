@@ -6,7 +6,7 @@ import networkx as nx
 from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 from ..extensions import db
-from ..models import TaskRun, TaskType, Workflow, WorkflowLink, WorkflowTask, WorkflowRun
+from ..models import TASK_TYPE_LABELS, TaskRun, TaskType, Workflow, WorkflowLink, WorkflowTask, WorkflowRun
 from ..executor.local import execute_workflow, list_files
 from .forms import WorkflowForm
 
@@ -131,7 +131,7 @@ def editor(workflow_id):
     wf = db.get_or_404(Workflow, workflow_id)
     if not can_access(wf):
         abort(403)
-    return render_template("workflows/editor.html", workflow=wf, editable=can_edit(wf))
+    return render_template("workflows/editor.html", workflow=wf, editable=can_edit(wf), task_types=TASK_TYPE_LABELS.items())
 
 @bp.get("/<int:workflow_id>/graph")
 @login_required
