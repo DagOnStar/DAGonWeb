@@ -4,7 +4,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -81,29 +80,19 @@ def execute_task(task: Any, task_dir: Path, workflow: Workflow) -> str:
     env.update(context)
     metadata = {"task": task.to_dict(), "env": context}
     (task_dir / "task.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    if task.task_type == "input":
-        value = config.get("value", "")
-        filename = str(config.get("filename", "input.txt"))
-        output_path = safe_child(task_dir, filename)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(str(value), encoding="utf-8")
-        return "Input materialized."
-    if task.task_type == "bash":
+    if task.task_type == "checkpoint":
+        (task_dir / "checkpoint.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+        return "Checkpoint metadata written."
+    if task.task_type == "batch":
         command = config.get("command", "echo hello from DAGonWeb > output.txt")
         completed = subprocess.run(command, shell=True, cwd=task_dir, env=env, text=True, capture_output=True, timeout=int(config.get("timeout", 3600)))
         output = completed.stdout + completed.stderr
         if completed.returncode:
-            raise RuntimeError(f"Bash task exited with status {completed.returncode}.\n{output}")
+            raise RuntimeError(f"Batch task exited with status {completed.returncode}.\n{output}")
         return output
-    if task.task_type == "python":
-        script = config.get("script", "from pathlib import Path\nPath('output.txt').write_text('hello from python task')\n")
-        script_path = task_dir / "task.py"
-        script_path.write_text(script, encoding="utf-8")
-        completed = subprocess.run([sys.executable, str(script_path)], cwd=task_dir, env=env, text=True, capture_output=True, timeout=int(config.get("timeout", 3600)))
-        output = completed.stdout + completed.stderr
-        if completed.returncode:
-            raise RuntimeError(f"Python task exited with status {completed.returncode}.\n{output}")
-        return output
+    if task.task_type in {"slurm", "cloud", "docker"}:
+        (task_dir / f"{task.task_type}_job.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+        return f"{task.task_type.title()} job metadata staged. Configure an execution adapter to submit it."
     if task.task_type == "native":
         module_function = config.get("callable", "")
         (task_dir / "native_result.json").write_text(json.dumps({"callable": module_function, "status": "stubbed"}, indent=2), encoding="utf-8")
@@ -111,6 +100,9 @@ def execute_task(task: Any, task_dir: Path, workflow: Workflow) -> str:
     if task.task_type == "llm":
         (task_dir / "prompt.json").write_text(json.dumps({"prompt": config.get("prompt", "")}, indent=2), encoding="utf-8")
         return "LLM task prompt staged. Configure an OpenAI-compatible backend before production execution."
+    if task.task_type == "web":
+        (task_dir / "web_request.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+        return "Web request metadata staged. Configure a web execution adapter before production execution."
     raise RuntimeError(f"Unsupported task type {task.task_type}")
 
 
@@ -119,9 +111,26 @@ def list_files(path: str) -> list[dict[str, Any]]:
     base = Path(path).resolve()
     if root not in base.parents and base != root:
         raise ValueError("Unsafe scratch path")
+    return list_directory(base)
+
+
+def list_directory(base: Path) -> list[dict[str, Any]]:
     if not base.exists():
         return []
+    if not base.is_dir():
+        raise ValueError("Path is not a directory")
     items = []
     for child in sorted(base.iterdir()):
-        items.append({"name": child.name, "is_dir": child.is_dir(), "size": child.stat().st_size})
+        items.append({"name": child.name, "is_dir": child.is_dir(), "size": child.stat().st_size, "modified_at": child.stat().st_mtime})
     return items
+
+
+def read_text_file(path: Path, max_bytes: int = 1_000_000) -> str:
+    if not path.is_file():
+        raise ValueError("Path is not a file")
+    if path.stat().st_size > max_bytes:
+        raise ValueError("File is too large to preview")
+    content = path.read_bytes()
+    if b"\0" in content:
+        raise ValueError("Binary files cannot be previewed")
+    return content.decode("utf-8")

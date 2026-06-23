@@ -15,19 +15,25 @@ user_roles = db.Table(
 )
 
 class TaskType(str, Enum):
-    BASH = "bash"
-    PYTHON = "python"
-    NATIVE = "native"
+    CHECKPOINT = "checkpoint"
+    BATCH = "batch"
+    SLURM = "slurm"
+    CLOUD = "cloud"
+    DOCKER = "docker"
     LLM = "llm"
-    INPUT = "input"
+    NATIVE = "native"
+    WEB = "web"
 
 
 TASK_TYPE_LABELS = {
-    TaskType.INPUT.value: "Input",
-    TaskType.BASH.value: "Bash",
-    TaskType.PYTHON.value: "Python",
-    TaskType.NATIVE.value: "DAGonStar Native",
+    TaskType.CHECKPOINT.value: "Checkpoint",
+    TaskType.BATCH.value: "Batch",
+    TaskType.SLURM.value: "Slurm",
+    TaskType.CLOUD.value: "Cloud",
+    TaskType.DOCKER.value: "Docker",
     TaskType.LLM.value: "LLM",
+    TaskType.NATIVE.value: "DAGonStar Native",
+    TaskType.WEB.value: "Web",
 }
 
 class RunStatus(str, Enum):
@@ -85,14 +91,21 @@ class Workflow(TimestampMixin, db.Model):
     tasks = db.relationship("WorkflowTask", cascade="all, delete-orphan", backref="workflow", lazy="joined")
     links = db.relationship("WorkflowLink", cascade="all, delete-orphan", backref="workflow", lazy="joined")
 
-    def to_graph_json(self) -> dict[str, Any]:
+    def as_json(self) -> dict[str, Any]:
+        tasks = [{key: value for key, value in task.to_dict().items() if key != "id"} for task in self.tasks]
+        links = [{key: value for key, value in link.to_dict().items() if key != "id"} for link in self.links]
         return {
-            "id": self.id,
+            "format": "dagonweb.workflow/v1",
             "name": self.name,
             "description": self.description,
-            "tasks": [task.to_dict() for task in self.tasks],
-            "links": [link.to_dict() for link in self.links],
+            "is_public": self.is_public,
+            "tasks": tasks,
+            "links": links,
         }
+
+    def to_graph_json(self) -> dict[str, Any]:
+        """Backward-compatible alias for the portable workflow document."""
+        return self.as_json()
 
 class WorkflowTask(TimestampMixin, db.Model):
     __tablename__ = "workflow_tasks"

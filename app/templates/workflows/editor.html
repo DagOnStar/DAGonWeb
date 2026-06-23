@@ -5,6 +5,6 @@
     {% for task_type, task_name in task_types %}<button class="list-group-item list-group-item-action" data-type="{{ task_type }}" data-label="{{ task_name }}">{{ task_name }}</button>{% endfor %}
   </div><div class="card-body small">Click a task type to place it. Select a source task, then a target task, to create a link and a <code>workflow://</code> relation.</div></div>
   <div id="workspace"><svg id="links"></svg></div>
-  <div id="inspector" class="card"><div class="card-header">Inspector</div><div class="card-body"><p class="text-muted">Select a task.</p></div></div>
+  <div id="inspector" class="card"><div id="inspectorResizer" title="Drag to resize the inspector"></div><div class="card-header">Inspector</div><div class="card-body"><p class="text-muted">Select a task.</p></div></div>
 </div>
 {% endblock %}{% block scripts %}<script src="{{ url_for('static', filename='js/editor.js') }}"></script>{% endblock %}

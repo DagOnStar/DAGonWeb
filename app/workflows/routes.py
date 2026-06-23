@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 import networkx as nx
-from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, Response, abort, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 from ..extensions import db
 from ..models import TASK_TYPE_LABELS, TaskRun, TaskType, Workflow, WorkflowLink, WorkflowTask, WorkflowRun
-from ..executor.local import execute_workflow, list_files
+from ..executor.local import execute_workflow, list_directory, list_files, read_text_file, safe_child
 from .forms import WorkflowForm
 
 bp = Blueprint("workflows", __name__)
@@ -41,7 +42,7 @@ def validate_graph_payload(payload: object) -> tuple[list[dict], list[dict]]:
             raise ValueError("Task IDs may contain only letters, numbers, underscores, and hyphens.")
         if uid in uids:
             raise ValueError("Task IDs must be unique.")
-        if task.get("task_type", "bash") not in task_types:
+        if task.get("task_type", "batch") not in task_types:
             raise ValueError("Unsupported task type.")
         if not isinstance(task.get("config", {}), dict):
             raise ValueError("Task configuration must be an object.")
@@ -77,6 +78,20 @@ def validate_graph_payload(payload: object) -> tuple[list[dict], list[dict]]:
     if not nx.is_directed_acyclic_graph(graph):
         raise ValueError("Workflow graph must be acyclic.")
     return tasks, links
+
+
+def apply_workflow_document(workflow: Workflow, document: object) -> None:
+    tasks, links = validate_graph_payload(document)
+    workflow.tasks.clear()
+    workflow.links.clear()
+    db.session.flush()
+    for task in tasks:
+        workflow_task = WorkflowTask(workflow_id=workflow.id, uid=task["uid"], label=task.get("label") or task["uid"], task_type=task.get("task_type", "batch"), x=int(task.get("x", 100)), y=int(task.get("y", 100)))
+        workflow_task.config = task.get("config", {})
+        db.session.add(workflow_task)
+    for link in links:
+        source_output = link.get("source_output", "output")
+        db.session.add(WorkflowLink(workflow_id=workflow.id, source_uid=link["source_uid"], source_output=source_output, target_uid=link["target_uid"], target_input=link.get("target_input", "input"), workflow_uri=f"workflow://{link['source_uid']}/{source_output}"))
 
 @bp.route("/")
 @login_required
@@ -139,7 +154,7 @@ def graph(workflow_id):
     wf = db.get_or_404(Workflow, workflow_id)
     if not can_access(wf):
         abort(403)
-    return jsonify(wf.to_graph_json())
+    return jsonify(wf.as_json())
 
 @bp.post("/<int:workflow_id>/graph")
 @login_required
@@ -148,22 +163,51 @@ def save_graph(workflow_id):
     if not can_edit(wf):
         abort(403)
     try:
-        tasks, links = validate_graph_payload(request.get_json(force=True))
+        apply_workflow_document(wf, request.get_json(force=True))
     except (ValueError, TypeError):
         return jsonify({"error": "Invalid workflow graph."}), 400
-    wf.tasks.clear()
-    wf.links.clear()
-    db.session.flush()
-    for task in tasks:
-        wt = WorkflowTask(workflow_id=wf.id, uid=task["uid"], label=task.get("label") or task["uid"], task_type=task.get("task_type", "bash"), x=int(task.get("x", 100)), y=int(task.get("y", 100)))
-        wt.config = task.get("config", {})
-        db.session.add(wt)
-    for link in links:
-        source_output = link.get("source_output", "output")
-        uri = f"workflow://{link['source_uid']}/{source_output}"
-        db.session.add(WorkflowLink(workflow_id=wf.id, source_uid=link["source_uid"], source_output=source_output, target_uid=link["target_uid"], target_input=link.get("target_input", "input"), workflow_uri=uri))
     db.session.commit()
-    return jsonify({"status": "ok", "workflow": wf.to_graph_json()})
+    return jsonify({"status": "ok", "workflow": wf.as_json()})
+
+
+@bp.get("/<int:workflow_id>/download")
+@login_required
+def download_workflow(workflow_id: int):
+    workflow = db.get_or_404(Workflow, workflow_id)
+    if not can_access(workflow):
+        abort(403)
+    filename = re.sub(r"[^A-Za-z0-9_-]+", "-", workflow.name).strip("-") or f"workflow-{workflow.id}"
+    return Response(json.dumps(workflow.as_json(), indent=2), mimetype="application/json", headers={"Content-Disposition": f'attachment; filename="{filename}.json"'})
+
+
+@bp.post("/upload")
+@login_required
+def upload_workflow():
+    uploaded = request.files.get("workflow_file")
+    if not uploaded or not uploaded.filename:
+        flash("Choose a workflow JSON file to upload.", "warning")
+        return redirect(url_for("workflows.list_workflows"))
+    try:
+        raw_document = uploaded.read(1_000_001)
+        if len(raw_document) > 1_000_000:
+            raise ValueError("Workflow file is too large.")
+        document = json.loads(raw_document)
+        if not isinstance(document, dict) or document.get("format") != "dagonweb.workflow/v1":
+            raise ValueError("Unsupported workflow JSON format.")
+        name = document.get("name")
+        if not isinstance(name, str) or not name.strip() or len(name) > 255:
+            raise ValueError("Workflow name is invalid.")
+        workflow = Workflow(owner_id=current_user.id, name=name.strip(), description=str(document.get("description", "")), is_public=bool(document.get("is_public", False)))
+        db.session.add(workflow)
+        db.session.flush()
+        apply_workflow_document(workflow, document)
+        db.session.commit()
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        db.session.rollback()
+        flash("The uploaded file is not a valid DAGonWeb workflow document.", "danger")
+        return redirect(url_for("workflows.list_workflows"))
+    flash("Workflow uploaded.", "success")
+    return redirect(url_for("workflows.editor", workflow_id=workflow.id))
 
 @bp.post("/<int:workflow_id>/run")
 @login_required
@@ -197,3 +241,34 @@ def files():
         return jsonify(list_files(path))
     except ValueError:
         abort(403)
+
+
+def task_run_file_path(task_run: TaskRun, relative_path: str) -> Path:
+    return safe_child(Path(task_run.scratch_path).resolve(), relative_path)
+
+
+@bp.get("/task-runs/<int:task_run_id>/files")
+@login_required
+def browse_task_run_files(task_run_id: int):
+    task_run = db.get_or_404(TaskRun, task_run_id)
+    if not can_access_run(task_run.run):
+        abort(403)
+    relative_path = request.args.get("path", "")
+    try:
+        base = task_run_file_path(task_run, relative_path)
+        return jsonify({"path": relative_path, "files": list_directory(base)})
+    except ValueError:
+        abort(403)
+
+
+@bp.get("/task-runs/<int:task_run_id>/file")
+@login_required
+def preview_task_run_file(task_run_id: int):
+    task_run = db.get_or_404(TaskRun, task_run_id)
+    if not can_access_run(task_run.run):
+        abort(403)
+    relative_path = request.args.get("path", "")
+    try:
+        return jsonify({"path": relative_path, "content": read_text_file(task_run_file_path(task_run, relative_path))})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400

@@ -1,1 +1,26 @@
-{% extends 'base.html' %}{% block content %}<h1>Run {{ run.id }} · {{ run.status }}</h1><p><strong>Scratch:</strong> <code>{{ run.scratch_path }}</code></p><pre class="bg-light p-3">{{ run.log }}</pre><h2 class="h4">Tasks</h2><div class="accordion" id="tasks">{% for tr in run.task_runs %}<div class="accordion-item"><h2 class="accordion-header"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#t{{ tr.id }}">{{ tr.task_uid }} · {{ tr.status }}</button></h2><div id="t{{ tr.id }}" class="accordion-collapse collapse" data-bs-parent="#tasks"><div class="accordion-body"><p><code>{{ tr.scratch_path }}</code></p><pre>{{ tr.log }}</pre><button class="btn btn-sm btn-outline-primary file-list" data-path="{{ tr.scratch_path }}">Inspect files</button><ul class="mt-2"></ul></div></div></div>{% endfor %}</div>{% endblock %}{% block scripts %}<script>document.querySelectorAll('.file-list').forEach(btn=>btn.addEventListener('click',async()=>{const r=await fetch('{{ url_for('workflows.files') }}?path='+encodeURIComponent(btn.dataset.path));const data=await r.json();btn.nextElementSibling.innerHTML=data.map(f=>`<li>${f.is_dir?'📁':'📄'} ${f.name} (${f.size} bytes)</li>`).join('')}));</script>{% endblock %}
+{% extends 'base.html' %}
+{% block content %}
+<h1>Run {{ run.id }} · {{ run.status }}</h1>
+<p><strong>Scratch:</strong> <code>{{ run.scratch_path }}</code></p>
+<pre class="bg-light p-3">{{ run.log }}</pre>
+<h2 class="h4">Tasks</h2>
+<div class="accordion" id="tasks">
+  {% for tr in run.task_runs %}
+  <div class="accordion-item">
+    <h2 class="accordion-header"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#t{{ tr.id }}">{{ tr.task_uid }} · {{ tr.status }}</button></h2>
+    <div id="t{{ tr.id }}" class="accordion-collapse collapse" data-bs-parent="#tasks"><div class="accordion-body">
+      <pre>{{ tr.log }}</pre>
+      <div class="scratch-browser" data-task-run="{{ tr.id }}">
+        <div class="d-flex align-items-center gap-2 mb-2"><strong>Scratch files</strong><button class="btn btn-sm btn-outline-secondary file-up" disabled>Up</button><code class="file-path"></code></div>
+        <div class="row g-3"><div class="col-md-5"><div class="list-group file-list"><div class="list-group-item text-muted">Open this task to browse its files.</div></div></div><div class="col-md-7"><pre class="file-preview bg-dark text-light p-3 mb-0">Select a text file to preview it.</pre></div></div>
+      </div>
+    </div></div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('.scratch-browser').forEach(browser=>{let path='';const id=browser.dataset.taskRun;const list=browser.querySelector('.file-list'),preview=browser.querySelector('.file-preview'),pathLabel=browser.querySelector('.file-path'),up=browser.querySelector('.file-up');const url=(name,p='')=>`{{ url_for('workflows.browse_task_run_files', task_run_id=0) }}`.replace('/0/',`/${id}/`).replace('files',name)+(p?`?path=${encodeURIComponent(p)}`:'');const show=async p=>{const r=await fetch(url('files',p));if(!r.ok){list.innerHTML='<div class="list-group-item text-danger">Unable to read this directory.</div>';return}const data=await r.json();path=p;pathLabel.textContent='/'+p;up.disabled=!p;list.innerHTML=data.files.length?data.files.map(f=>`<button class="list-group-item list-group-item-action" data-name="${escapeHtml(f.name)}" data-dir="${f.is_dir}">${f.is_dir?'📁':'📄'} ${escapeHtml(f.name)} <small class="text-muted float-end">${f.is_dir?'':f.size+' B'}</small></button>`).join(''):'<div class="list-group-item text-muted">This directory is empty.</div>';list.querySelectorAll('button').forEach(b=>b.onclick=()=>{const next=path?path+'/'+b.dataset.name:b.dataset.name;if(b.dataset.dir==='true')show(next);else previewFile(next)})};const previewFile=async p=>{preview.textContent='Loading…';const r=await fetch(url('file',p));const data=await r.json();preview.textContent=r.ok?data.content:(data.error||'Unable to preview this file.')};up.onclick=()=>show(path.split('/').slice(0,-1).join('/'));browser.closest('.accordion-collapse').addEventListener('shown.bs.collapse',()=>show(path),{once:true})});function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]))}
+</script>
+{% endblock %}
