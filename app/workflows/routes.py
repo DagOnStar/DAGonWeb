@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+from io import BytesIO
 from threading import Thread
+from zipfile import ZIP_DEFLATED, ZipFile
 from pathlib import Path
 import networkx as nx
-from flask import Blueprint, Response, abort, current_app, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, Response, abort, current_app, flash, jsonify, redirect, render_template, request, send_file, url_for
 from flask_login import current_user, login_required
 from ..extensions import db
 from ..models import TASK_TYPE_LABELS, TaskRun, TaskType, Workflow, WorkflowLink, WorkflowTask, WorkflowRun
@@ -431,3 +433,39 @@ def preview_task_run_file(task_run_id: int):
         return jsonify({"path": relative_path, "content": read_text_file(task_run_file_path(task_run, relative_path))})
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+
+
+@bp.get("/task-runs/<int:task_run_id>/download")
+@login_required
+def download_task_run_file(task_run_id: int):
+    task_run = db.get_or_404(TaskRun, task_run_id)
+    if not can_access_run(task_run.run):
+        abort(403)
+    try:
+        path = task_run_file_path(task_run, request.args.get("path", ""))
+        if not path.is_file():
+            abort(404)
+        return send_file(path, as_attachment=True, download_name=path.name)
+    except ValueError:
+        abort(403)
+
+
+@bp.get("/task-runs/<int:task_run_id>/archive")
+@login_required
+def download_task_run_archive(task_run_id: int):
+    task_run = db.get_or_404(TaskRun, task_run_id)
+    if not can_access_run(task_run.run):
+        abort(403)
+    root = Path(task_run.scratch_path).resolve()
+    try:
+        if not root.is_dir():
+            abort(404)
+        archive = BytesIO()
+        with ZipFile(archive, "w", ZIP_DEFLATED) as zip_file:
+            for path in root.rglob("*"):
+                if path.is_file():
+                    zip_file.write(path, path.relative_to(root))
+        archive.seek(0)
+        return send_file(archive, mimetype="application/zip", as_attachment=True, download_name=f"{task_run.task_uid}-scratch.zip")
+    except ValueError:
+        abort(403)
