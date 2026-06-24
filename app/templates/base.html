@@ -19,6 +19,7 @@
       <ul class="navbar-nav me-auto">
         {% if current_user.is_authenticated %}
           <li class="nav-item"><a class="nav-link" href="{{ url_for('workflows.list_workflows') }}">Workflows</a></li>
+          <li class="nav-item"><a class="nav-link" href="{{ url_for('workflows.list_runs') }}">Runs</a></li>
           {% if current_user.has_role('admin') %}<li class="nav-item"><a class="nav-link" href="{{ url_for('admin.dashboard') }}">Admin</a></li>{% endif %}
         {% endif %}
       </ul>

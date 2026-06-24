@@ -7,3 +7,10 @@ class WorkflowForm(FlaskForm):
     description = TextAreaField("Description", validators=[Optional()])
     is_public = BooleanField("Public")
     submit = SubmitField("Save workflow")
+
+
+class RunForm(FlaskForm):
+    """User-editable metadata for an immutable execution record."""
+
+    label = StringField("Label", validators=[Optional(), Length(max=255)])
+    submit = SubmitField("Save run")

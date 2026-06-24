@@ -107,6 +107,27 @@ class Workflow(TimestampMixin, db.Model):
                 "type": task.normalized_task_type,
                 "dagonweb": {"x": task.x, "y": task.y, "config": config},
             }
+            # DAGonStar's JSON loader receives web-task settings through its
+            # native ``specification`` field.  Keep the editor settings in the
+            # additive DAGonWeb extension too, so exported documents remain
+            # portable and editable by DAGonWeb.
+            if task.normalized_task_type == "web":
+                tasks[task.name]["specification"] = config
+            elif task.normalized_task_type == "native":
+                # NativeTask's JSON loader expects its bindings at the task
+                # level, rather than inside DAGonWeb's editor extension.
+                native_settings = {
+                    "function": config.get("callable", ""),
+                    "inputs": config.get("inputs", {}),
+                    "outputs": config.get("outputs", {}),
+                    "executor": config.get("executor", "local"),
+                }
+                native_settings.update({
+                    key: config[key]
+                    for key in ("resources", "python", "environment")
+                    if config.get(key) not in (None, "", {})
+                })
+                tasks[task.name].update(native_settings)
         for link in self.links:
             if link.source_uid in tasks and link.target_uid in tasks:
                 tasks[link.source_uid]["nexts"].append(link.target_uid)
@@ -173,6 +194,7 @@ class WorkflowRun(TimestampMixin, db.Model):
     workflow_id = db.Column(db.Integer, db.ForeignKey("workflows.id"), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     status = db.Column(db.String(30), default=RunStatus.PENDING.value, nullable=False)
+    label = db.Column(db.String(255), default="", nullable=False)
     scratch_path = db.Column(db.String(1024), nullable=False)
     log = db.Column(db.Text, default="")
     workflow = db.relationship("Workflow", backref=db.backref("runs", lazy="dynamic"))

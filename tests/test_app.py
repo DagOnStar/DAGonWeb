@@ -6,8 +6,8 @@ from app.config import TestConfig
 from app.extensions import db
 import pytest
 
-from app.executor.local import execute_task, safe_child
-from app.models import TASK_TYPE_LABELS, Role, TaskRun, TaskType, User, Workflow, WorkflowLink, WorkflowRun, WorkflowTask
+from app.executor.local import dagonstar_document, execute_task, materialize_native_sources, safe_child
+from app.models import TASK_TYPE_LABELS, Role, Setting, TaskRun, TaskType, User, Workflow, WorkflowLink, WorkflowRun, WorkflowTask
 from app.workflows.routes import apply_import_layout, validate_graph_payload, workflow_python_source
 
 
@@ -71,6 +71,75 @@ def test_workflow_json_download_and_upload_round_trip():
         assert imported_task["dagonweb"]["config"] == document["tasks"]["checkpoint"]["dagonweb"]["config"]
 
 
+def test_web_task_serializes_native_dagonstar_specification():
+    app = make_app()
+    with app.app_context():
+        admin = User.query.filter_by(email="admin@example.org").one()
+        workflow = Workflow(owner_id=admin.id, name="Web download")
+        task = WorkflowTask(uid="download", label="download", task_type="web")
+        specification = {
+            "url": "https://example.test/data.nc",
+            "method": "GET",
+            "outputs": {"body": "output.nc"},
+        }
+        task.config = specification
+        workflow.tasks.append(task)
+        db.session.add(workflow)
+        db.session.commit()
+
+        document = workflow.as_json()
+
+    assert document["tasks"]["download"]["specification"] == specification
+    assert document["tasks"]["download"]["dagonweb"]["config"] == specification
+    runtime_document = dagonstar_document(workflow)
+    assert runtime_document["tasks"]["download"]["python"]
+
+    from dagon import Workflow as DagonStarWorkflow
+    runtime = DagonStarWorkflow(
+        workflow.name,
+        config={"batch": {"scratch_dir_base": "/tmp", "remove_dir": False}, "ftp_pub": {}, "dagon_service": {"use": "False"}},
+        jsonload=runtime_document,
+    )
+    assert runtime.tasks[0].specification["url"] == specification["url"]
+
+
+def test_native_task_serializes_dagonstar_bindings():
+    workflow = Workflow(id=7, owner_id=1, name="Native bindings")
+    task = WorkflowTask(uid="scale", label="scale", task_type="native")
+    task.config = {
+        "callable": "analysis_functions:scale_values",
+        "inputs": {"input_file": "workflow:///produce/data/values.txt", "factor": 1.5},
+        "outputs": {"output_file": "scaled-values.txt"},
+        "executor": "local",
+        "environment": {"OMP_NUM_THREADS": "1"},
+    }
+    workflow.tasks.append(task)
+
+    document = workflow.as_json()["tasks"]["scale"]
+
+    assert document["function"] == "analysis_functions:scale_values"
+    assert document["inputs"]["input_file"] == "workflow:///produce/data/values.txt"
+    assert document["outputs"] == {"output_file": "scaled-values.txt"}
+    assert document["environment"] == {"OMP_NUM_THREADS": "1"}
+
+
+def test_native_source_is_materialized_as_an_importable_module(tmp_path):
+    workflow = Workflow(id=11, owner_id=1, name="Embedded native source")
+    task = WorkflowTask(uid="double", label="double", task_type="native")
+    task.config = {
+        "callable": "workflow_functions.math:double",
+        "source": "def double(value: int) -> dict:\n    return {'result': value * 2}\n",
+    }
+    workflow.tasks.append(task)
+
+    root, modules = materialize_native_sources(workflow, tmp_path)
+
+    assert modules == {"workflow_functions.math"}
+    assert root is not None
+    assert (root / "workflow_functions" / "__init__.py").is_file()
+    assert (root / "workflow_functions" / "math.py").read_text(encoding="utf-8").startswith("def double")
+
+
 def test_python_generator_creates_direct_dagonstar_task_code():
     workflow = Workflow(id=7, owner_id=1, name="Example")
     task = WorkflowTask(uid="a", label="a", task_type="batch")
@@ -126,6 +195,9 @@ def test_executor_rejects_failed_batch_commands_and_unsafe_paths(tmp_path):
 def test_users_cannot_inspect_other_users_run_files(tmp_path):
     app = make_app()
     with app.app_context():
+        # Task artifacts must live below the configured scratch root.
+        Setting.query.filter_by(key="scratch_dir").one().value = str(tmp_path)
+        db.session.commit()
         owner = User(email="owner@example.org", name="Owner", active=True)
         owner.set_password("password123")
         viewer = User(email="viewer@example.org", name="Viewer", active=True)
@@ -164,3 +236,37 @@ def test_users_cannot_inspect_other_users_run_files(tmp_path):
     response = client.get(f"/workflows/task-runs/{task_run_id}/file?path=result.txt")
     assert response.status_code == 200
     assert response.get_json()["content"] == "private result"
+
+
+def test_run_status_includes_live_run_and_task_logs(tmp_path):
+    app = make_app()
+    with app.app_context():
+        owner = User(email="logs@example.org", name="Logs", active=True)
+        owner.set_password("password123")
+        db.session.add(owner)
+        db.session.flush()
+        workflow = Workflow(owner_id=owner.id, name="Logged workflow")
+        db.session.add(workflow)
+        db.session.flush()
+        run = WorkflowRun(workflow_id=workflow.id, user_id=owner.id, status="running", scratch_path=str(tmp_path), log="[time] Workflow started.\n")
+        db.session.add(run)
+        db.session.flush()
+        db.session.add(TaskRun(workflow_run_id=run.id, task_uid="task", status="running", scratch_path=str(tmp_path), log="[time] Task task started.\n"))
+        db.session.commit()
+        owner_id, workflow_id, run_id = str(owner.id), workflow.id, run.id
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = owner_id
+        session["_fresh"] = True
+    detail = client.get(f"/workflows/{workflow_id}/runs/{run_id}")
+    assert detail.status_code == 200
+    assert b"Run workflow" in detail.data
+    assert b"Live execution log" in detail.data
+    response = client.get(f"/workflows/{workflow_id}/runs/{run_id}/status")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["log"] == "[time] Workflow started.\n"
+    assert len(payload["tasks"]) == 1
+    assert payload["tasks"][0]["name"] == "task"
+    assert payload["tasks"][0]["log"] == "[time] Task task started.\n"

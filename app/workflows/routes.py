@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from io import BytesIO
 from threading import Thread
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -11,8 +12,8 @@ from flask import Blueprint, Response, abort, current_app, flash, jsonify, redir
 from flask_login import current_user, login_required
 from ..extensions import db
 from ..models import TASK_TYPE_LABELS, TaskRun, TaskType, Workflow, WorkflowLink, WorkflowTask, WorkflowRun
-from ..executor.local import execute_workflow, list_directory, list_files, read_text_file, safe_child
-from .forms import WorkflowForm
+from ..executor.local import execute_workflow, list_directory, list_files, preview_task_file, safe_child, scratch_root
+from .forms import RunForm, WorkflowForm
 
 bp = Blueprint("workflows", __name__)
 WORKFLOW_REFERENCE = re.compile(r"workflow:///([A-Za-z0-9_-]{1,80})/([^\s]+)")
@@ -26,6 +27,21 @@ def can_edit(workflow: Workflow) -> bool:
 
 def can_access_run(run: WorkflowRun) -> bool:
     return run.user_id == current_user.id or current_user.has_role("admin")
+
+
+def can_manage_run(run: WorkflowRun) -> bool:
+    """Only the creator (or an administrator) may change a run record."""
+    return can_access_run(run)
+
+
+def remove_run_scratch(run: WorkflowRun) -> None:
+    """Remove a completed run's artifacts only when they are under scratch."""
+    if not run.scratch_path:
+        return
+    root = scratch_root()
+    run_root = Path(run.scratch_path).resolve()
+    if root in run_root.parents and run_root.is_dir():
+        shutil.rmtree(run_root)
 
 
 def validate_graph_payload(payload: object) -> tuple[list[dict], list[dict]]:
@@ -266,7 +282,8 @@ def workflow_python_source(workflow: Workflow) -> str:
         task_type = task.normalized_task_type.upper()
         identifier = identifiers[task.name]
         if task_type == "NATIVE":
-            declarations.append(f"{identifier} = DagonTask(TaskType.NATIVE, {task.name!r}, {config.get('callable', '')!r}, inputs={config.get('inputs', {})!r}, outputs={config.get('outputs', {})!r})")
+            options = {key: config[key] for key in ("executor", "resources", "python", "environment") if config.get(key) not in (None, "", {})}
+            declarations.append(f"{identifier} = DagonTask(TaskType.NATIVE, {task.name!r}, {config.get('callable', '')!r}, inputs={config.get('inputs', {})!r}, outputs={config.get('outputs', {})!r}, **{options!r})")
         elif task_type == "WEB":
             specification = {key: value for key, value in config.items() if key != "inputs"}
             declarations.append(f"{identifier} = DagonTask(TaskType.WEB, {task.name!r}, {specification!r})")
@@ -346,7 +363,7 @@ def run_workflow(workflow_id):
     wf = db.get_or_404(Workflow, workflow_id)
     if not can_access(wf):
         abort(403)
-    run = WorkflowRun(workflow_id=wf.id, user_id=current_user.id, status="pending", scratch_path="", log="")
+    run = WorkflowRun(workflow_id=wf.id, user_id=current_user.id, status="pending", label="", scratch_path="", log="")
     db.session.add(run)
     db.session.commit()
     workflow_id = wf.id
@@ -369,6 +386,46 @@ def run_workflow(workflow_id):
     flash("Workflow run started.", "info")
     return redirect(url_for("workflows.run_detail", workflow_id=wf.id, run_id=run.id))
 
+
+@bp.get("/runs")
+@login_required
+def list_runs():
+    query = WorkflowRun.query.join(Workflow)
+    if not current_user.has_role("admin"):
+        query = query.filter(WorkflowRun.user_id == current_user.id)
+    return render_template("workflows/runs.html", runs=query.order_by(WorkflowRun.created_at.desc()).all())
+
+
+@bp.route("/runs/<int:run_id>/edit", methods=["GET", "POST"])
+@login_required
+def edit_run(run_id: int):
+    run = db.get_or_404(WorkflowRun, run_id)
+    if not can_manage_run(run):
+        abort(403)
+    form = RunForm(obj=run)
+    if form.validate_on_submit():
+        run.label = (form.label.data or "").strip()
+        db.session.commit()
+        flash("Run updated.", "success")
+        return redirect(url_for("workflows.run_detail", workflow_id=run.workflow_id, run_id=run.id))
+    return render_template("workflows/run_form.html", form=form, run=run)
+
+
+@bp.post("/runs/<int:run_id>/delete")
+@login_required
+def delete_run(run_id: int):
+    run = db.get_or_404(WorkflowRun, run_id)
+    if not can_manage_run(run):
+        abort(403)
+    if run.status in {"pending", "running"}:
+        flash("A run cannot be deleted while it is active.", "warning")
+        return redirect(url_for("workflows.run_detail", workflow_id=run.workflow_id, run_id=run.id))
+    remove_run_scratch(run)
+    db.session.delete(run)
+    db.session.commit()
+    flash("Run and its scratch files deleted.", "success")
+    return redirect(url_for("workflows.list_runs"))
+
 @bp.route("/<int:workflow_id>/runs/<int:run_id>")
 @login_required
 def run_detail(workflow_id, run_id):
@@ -389,7 +446,20 @@ def run_status(workflow_id: int, run_id: int):
         abort(404)
     if not can_access_run(run):
         abort(403)
-    return jsonify({"status": run.status, "tasks": [{"id": task_run.id, "name": task_run.task_uid, "status": task_run.status, "scratch_path": task_run.scratch_path} for task_run in run.task_runs]})
+    return jsonify({
+        "status": run.status,
+        "log": run.log or "",
+        "tasks": [
+            {
+                "id": task_run.id,
+                "name": task_run.task_uid,
+                "status": task_run.status,
+                "scratch_path": task_run.scratch_path,
+                "log": task_run.log or "",
+            }
+            for task_run in run.task_runs
+        ],
+    })
 
 @bp.get("/files")
 @login_required
@@ -405,7 +475,13 @@ def files():
 
 
 def task_run_file_path(task_run: TaskRun, relative_path: str) -> Path:
-    return safe_child(Path(task_run.scratch_path).resolve(), relative_path)
+    # Stored paths are treated as untrusted too: never let a record point the
+    # browser outside the configured scratch root.
+    root = scratch_root()
+    task_root = Path(task_run.scratch_path).resolve()
+    if root not in task_root.parents and task_root != root:
+        raise ValueError("Unsafe scratch path")
+    return safe_child(task_root, relative_path)
 
 
 @bp.get("/task-runs/<int:task_run_id>/files")
@@ -430,7 +506,7 @@ def preview_task_run_file(task_run_id: int):
         abort(403)
     relative_path = request.args.get("path", "")
     try:
-        return jsonify({"path": relative_path, "content": read_text_file(task_run_file_path(task_run, relative_path))})
+        return jsonify({"path": relative_path, **preview_task_file(task_run_file_path(task_run, relative_path))})
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -456,8 +532,8 @@ def download_task_run_archive(task_run_id: int):
     task_run = db.get_or_404(TaskRun, task_run_id)
     if not can_access_run(task_run.run):
         abort(403)
-    root = Path(task_run.scratch_path).resolve()
     try:
+        root = task_run_file_path(task_run, "")
         if not root.is_dir():
             abort(404)
         archive = BytesIO()

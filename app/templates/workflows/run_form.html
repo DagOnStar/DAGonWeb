@@ -1,0 +1,4 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="row justify-content-center"><div class="col-lg-6"><h1 class="h3">Edit run</h1><p class="text-muted">Use a label to make this execution easier to find. Execution status and logs are managed by DAGonStar.</p><form method="post" class="card card-body">{{ form.hidden_tag() }}<div class="mb-3">{{ form.label.label(class_='form-label') }}{{ form.label(class_='form-control', placeholder='Optional label') }}{% for error in form.label.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div><div class="d-flex gap-2">{{ form.submit(class_='btn btn-primary') }}<a class="btn btn-outline-secondary" href="{{ url_for('workflows.run_detail', workflow_id=run.workflow_id, run_id=run.id) }}">Cancel</a></div></form></div></div>
+{% endblock %}

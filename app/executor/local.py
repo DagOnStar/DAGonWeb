@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import importlib
 import os
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,12 @@ import networkx as nx
 from flask import current_app
 from ..extensions import db
 from ..models import LEGACY_TASK_TYPES, RunStatus, Setting, TaskRun, Workflow, WorkflowRun
+
+
+def timestamped_log(message: str) -> str:
+    """Format an execution event for display in the live run log."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return f"[{now}] {message}\n"
 
 
 def scratch_root() -> Path:
@@ -27,6 +35,53 @@ def safe_child(root: Path, *parts: str) -> Path:
     return path
 
 
+def dagonstar_document(workflow: Workflow) -> dict[str, Any]:
+    """Build the runtime-only DAGonStar document for a stored workflow."""
+    document = workflow.as_json()
+    for task in document["tasks"].values():
+        if task["type"] == "web":
+            # DAGonStar's JSON loader otherwise defaults to a ``python``
+            # executable that may not exist in a virtualenv-only deployment.
+            task["python"] = sys.executable
+        elif task["type"] == "native" and not task.get("python"):
+            # Keep the native runner in the same environment as the web app.
+            task["python"] = sys.executable
+    return document
+
+
+def materialize_native_sources(workflow: Workflow, root: Path) -> tuple[Path | None, set[str]]:
+    """Write workflow-owned Native sources under scratch so they are importable.
+
+    Sources are never accepted as filesystem paths: the module name decides a
+    safe relative destination below the configured scratch root.
+    """
+    module_root = safe_child(root, f"workflow-{workflow.id}", "native_modules")
+    modules: set[str] = set()
+    for task in workflow.tasks:
+        config = task.config
+        source = config.get("source")
+        if task.normalized_task_type != "native" or not isinstance(source, str) or not source.strip():
+            continue
+        function = config.get("callable", "")
+        module, separator, _ = function.partition(":")
+        parts = module.split(".")
+        if not separator or not parts or any(not part.isidentifier() for part in parts):
+            raise ValueError("Native source requires a callable in module:function form.")
+        try:
+            compile(source, f"{module}.py", "exec")
+        except SyntaxError as exc:
+            raise ValueError(f"Native source has invalid Python syntax: {exc.msg}") from exc
+        target = safe_child(module_root, *parts[:-1], f"{parts[-1]}.py")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source.rstrip() + "\n", encoding="utf-8")
+        parent = module_root
+        for part in parts[:-1]:
+            parent = parent / part
+            (parent / "__init__.py").touch(exist_ok=True)
+        modules.add(module)
+    return (module_root, modules) if modules else (None, modules)
+
+
 def execute_workflow(workflow: Workflow, user_id: int, run: WorkflowRun | None = None) -> WorkflowRun:
     root = scratch_root()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -38,15 +93,26 @@ def execute_workflow(workflow: Workflow, user_id: int, run: WorkflowRun | None =
     else:
         run.status = RunStatus.RUNNING.value
         run.scratch_path = str(run_dir)
+    run.log = (run.log or "") + timestamped_log("Workflow started.")
     db.session.commit()
+    module_root: Path | None = None
     try:
         from dagon import Workflow as DagonStarWorkflow
+
+        module_root, modules = materialize_native_sources(workflow, root)
+        if module_root:
+            sys.path.insert(0, str(module_root))
+            importlib.invalidate_caches()
+            for module in modules:
+                sys.modules.pop(module, None)
 
         runtime = DagonStarWorkflow(
             workflow.name,
             config={"batch": {"scratch_dir_base": str(root), "remove_dir": False}, "ftp_pub": {}, "dagon_service": {"use": "False"}},
-            jsonload=workflow.as_json(),
+            jsonload=dagonstar_document(workflow),
         )
+        if module_root:
+            sys.path.remove(str(module_root))
         task_runs = {task.name: TaskRun(workflow_run_id=run.id, task_uid=task.name, status=RunStatus.PENDING.value, scratch_path=str(run_dir), log="") for task in runtime.tasks}
         db.session.add_all(task_runs.values())
         db.session.commit()
@@ -56,8 +122,18 @@ def execute_workflow(workflow: Workflow, user_id: int, run: WorkflowRun | None =
             with app.app_context():
                 task_run = db.session.get(TaskRun, task_runs[task.name].id)
                 if task_run:
-                    task_run.status = {"RUNNING": RunStatus.RUNNING.value, "FINISHED": RunStatus.SUCCESS.value, "FAILED": RunStatus.FAILED.value}.get(task.status.name, RunStatus.PENDING.value)
+                    status = {"RUNNING": RunStatus.RUNNING.value, "FINISHED": RunStatus.SUCCESS.value, "FAILED": RunStatus.FAILED.value}.get(task.status.name, RunStatus.PENDING.value)
+                    previous_status = task_run.status
+                    task_run.status = status
                     task_run.scratch_path = task.working_dir or str(run_dir)
+                    if status != previous_status:
+                        event = {RunStatus.RUNNING.value: "started", RunStatus.SUCCESS.value: "completed", RunStatus.FAILED.value: "failed"}.get(status)
+                        if event:
+                            message = timestamped_log(f"Task {task.name} {event}.")
+                            task_run.log = (task_run.log or "") + message
+                            current_run = db.session.get(WorkflowRun, run.id)
+                            if current_run:
+                                current_run.log = (current_run.log or "") + message
                     db.session.commit()
 
         runtime.on_task_start += update_task_status
@@ -67,10 +143,12 @@ def execute_workflow(workflow: Workflow, user_id: int, run: WorkflowRun | None =
         for runtime_task in runtime.tasks:
             update_task_status(runtime_task)
         run.status = RunStatus.SUCCESS.value if all(task.status.name == "FINISHED" for task in runtime.tasks) else RunStatus.FAILED.value
-        run.log = f"DAGonStar workflow completed with status: {run.status}.\n"
+        run.log = (run.log or "") + timestamped_log(f"DAGonStar workflow completed with status: {run.status}.")
     except Exception as exc:
+        if module_root and str(module_root) in sys.path:
+            sys.path.remove(str(module_root))
         run.status = RunStatus.FAILED.value
-        run.log = f"DAGonStar workflow failed: {exc}\n"
+        run.log = (run.log or "") + timestamped_log(f"DAGonStar workflow failed: {exc}")
     db.session.commit()
     return run
 
@@ -174,3 +252,64 @@ def read_text_file(path: Path, max_bytes: int = 1_000_000) -> str:
     if b"\0" in content:
         raise ValueError("Binary files cannot be previewed")
     return content.decode("utf-8")
+
+
+def preview_task_file(path: Path) -> dict[str, Any]:
+    """Return a safe, presentation-neutral preview payload for a task artifact."""
+    if _is_netcdf(path):
+        return {"kind": "netcdf", "metadata": read_netcdf_metadata(path)}
+    content = read_text_file(path)
+    try:
+        value = json.loads(content)
+    except json.JSONDecodeError:
+        value = None
+    if value is not None:
+        return {"kind": "geojson" if is_geojson(value) else "json", "content": content}
+    if path.suffix.lower() in {".csv", ".tsv"}:
+        return {"kind": "csv", "content": content, "delimiter": "\t" if path.suffix.lower() == ".tsv" else ","}
+    return {"kind": "text", "content": content}
+
+
+def is_geojson(value: Any) -> bool:
+    return isinstance(value, dict) and value.get("type") in {"Feature", "FeatureCollection", "GeometryCollection", "Point", "MultiPoint", "LineString", "MultiLineString", "Polygon", "MultiPolygon"}
+
+
+def _is_netcdf(path: Path) -> bool:
+    if path.suffix.lower() in {".nc", ".nc4", ".cdf", ".netcdf"}:
+        return True
+    if not path.is_file():
+        return False
+    with path.open("rb") as file:
+        signature = file.read(8)
+    return signature.startswith(b"CDF") or signature == b"\x89HDF\r\n\x1a\n"
+
+
+def read_netcdf_metadata(path: Path, max_bytes: int = 100_000_000) -> dict[str, Any]:
+    """Read descriptive metadata only; NetCDF array values are never loaded."""
+    if not path.is_file():
+        raise ValueError("Path is not a file")
+    if path.stat().st_size > max_bytes:
+        raise ValueError("NetCDF file is too large to preview")
+    try:
+        from netCDF4 import Dataset
+    except ImportError as exc:
+        raise ValueError("NetCDF preview support is unavailable") from exc
+    try:
+        with Dataset(path, "r") as dataset:
+            return {
+                "dimensions": {name: {"size": len(dimension), "unlimited": dimension.isunlimited()} for name, dimension in dataset.dimensions.items()},
+                "variables": {name: {"dimensions": list(variable.dimensions), "shape": list(variable.shape), "dtype": str(variable.dtype), "attributes": {attribute: _metadata_value(variable.getncattr(attribute)) for attribute in variable.ncattrs()}} for name, variable in dataset.variables.items()},
+                "attributes": {attribute: _metadata_value(dataset.getncattr(attribute)) for attribute in dataset.ncattrs()},
+            }
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("Unable to read NetCDF metadata") from exc
+
+
+def _metadata_value(value: Any) -> Any:
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, list):
+        return value[:100]
+    return str(value)
