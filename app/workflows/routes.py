@@ -233,6 +233,29 @@ def download_workflow(workflow_id: int):
     return Response(json.dumps(workflow.as_json(), indent=2), mimetype="application/json", headers={"Content-Disposition": f'attachment; filename="{filename}.json"'})
 
 
+@bp.get("/<int:workflow_id>/python")
+@login_required
+def download_workflow_python(workflow_id: int):
+    workflow = db.get_or_404(Workflow, workflow_id)
+    if not can_access(workflow):
+        abort(403)
+    filename = re.sub(r"[^A-Za-z0-9_-]+", "-", workflow.name).strip("-") or f"workflow-{workflow.id}"
+    document = json.dumps(workflow.as_json(), indent=2)
+    source = f'''#!/usr/bin/env python3
+"""Generated DAGonStar workflow."""
+import json
+from dagon import Workflow
+
+WORKFLOW_DOCUMENT = json.loads({document!r})
+
+if __name__ == "__main__":
+    workflow = Workflow(WORKFLOW_DOCUMENT["name"], jsonload=WORKFLOW_DOCUMENT)
+    workflow.launch()
+    workflow.wait()
+'''
+    return Response(source, mimetype="text/x-python", headers={"Content-Disposition": f'attachment; filename="{filename}.py"'})
+
+
 @bp.post("/upload")
 @login_required
 def upload_workflow():
@@ -271,13 +294,22 @@ def run_workflow(workflow_id):
     run = WorkflowRun(workflow_id=wf.id, user_id=current_user.id, status="pending", scratch_path="", log="")
     db.session.add(run)
     db.session.commit()
+    workflow_id = wf.id
+    run_id = run.id
     app = current_app._get_current_object()
     def execute_in_background() -> None:
         with app.app_context():
-            workflow = db.session.get(Workflow, wf.id)
-            workflow_run = db.session.get(WorkflowRun, run.id)
-            if workflow and workflow_run:
-                execute_workflow(workflow, workflow_run.user_id, workflow_run)
+            try:
+                workflow = db.session.get(Workflow, workflow_id)
+                workflow_run = db.session.get(WorkflowRun, run_id)
+                if workflow and workflow_run:
+                    execute_workflow(workflow, workflow_run.user_id, workflow_run)
+            except Exception as exc:
+                workflow_run = db.session.get(WorkflowRun, run_id)
+                if workflow_run:
+                    workflow_run.status = "failed"
+                    workflow_run.log = f"Unable to start DAGonStar workflow: {exc}\n"
+                    db.session.commit()
     Thread(target=execute_in_background, daemon=False).start()
     flash("Workflow run started.", "info")
     return redirect(url_for("workflows.run_detail", workflow_id=wf.id, run_id=run.id))
