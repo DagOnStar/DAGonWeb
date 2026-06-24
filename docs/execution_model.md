@@ -1,23 +1,7 @@
 # Execution model
 
-The demo executor runs locally. It creates a run directory:
+DAGonWeb constructs a DAGonStar `Workflow` from the persisted task-map document. It launches the runtime asynchronously with `launch()` and waits in a server-side worker; browser navigation does not stop the run.
 
-```text
-<SCRATCH_DIR>/workflow-<id>/run-<timestamp>/
-```
+Before execution, DAGonStar discovers dependencies from `workflow:///task/path` references and stages referenced task outputs. Run and task statuses are persisted in the database and shown on the live run graph.
 
-Each task receives a subdirectory:
-
-```text
-<SCRATCH_DIR>/workflow-<id>/run-<timestamp>/<task_uid>/
-```
-
-Supported demo task behavior:
-
-- `input`: writes configured content to a file.
-- `bash`: executes a shell command in the task scratch directory.
-- `python`: writes and runs a Python script in the task scratch directory.
-- `native`: writes DAGonStar-style native task metadata for adapter integration.
-- `llm`: writes prompt metadata for later OpenAI-compatible integration.
-
-Before running, the executor checks that the graph is a directed acyclic graph. DAGonStar-specific execution can be added behind the same interface by translating `WorkflowTask` and `WorkflowLink` rows into DAGonStar task declarations.
+Run artifacts are located below the configured scratch root. Completed task nodes expose a restricted file browser, UTF-8 preview, individual file download, and scratch-directory ZIP download. Restarting the application process itself still requires a durable worker system for recovery.

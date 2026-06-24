@@ -1,23 +1,12 @@
-# Internal graph API
+# Workflow API
 
-The editor uses two authenticated JSON endpoints:
+All workflow endpoints require an authenticated user and enforce ownership or administrator access.
 
-```http
-GET /workflows/<id>/graph
-POST /workflows/<id>/graph
-```
+- `GET /workflows/<id>/graph` returns the DAGonStar workflow document.
+- `POST /workflows/<id>/graph` saves that document.
+- `GET /workflows/<id>/download` downloads JSON.
+- `POST /workflows/upload` imports DAGonStar JSON.
+- `GET /workflows/<id>/python` downloads generated DAGonStar Python source.
+- `GET /workflows/<id>/runs/<run>/status` returns the persisted live run/task statuses.
 
-The POST payload shape is:
-
-```json
-{
-  "tasks": [
-    {"uid": "task_a", "label": "Task A", "task_type": "bash", "x": 100, "y": 100, "config": {}}
-  ],
-  "links": [
-    {"source_uid": "task_a", "source_output": "output", "target_uid": "task_b", "target_input": "input"}
-  ]
-}
-```
-
-The server generates the canonical `workflow_uri` for each link.
+The graph document uses `tasks` keyed by task name. Each task has DAGonStar fields such as `type`, `command`, `nexts`, and `prevs`; editor position and configuration are stored under the additive `dagonweb` object. Imports ignore `nexts`/`prevs` and infer links exclusively from `workflow:///producer/path` references.

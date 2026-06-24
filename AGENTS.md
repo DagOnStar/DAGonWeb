@@ -1,11 +1,12 @@
 # AGENTS.md
 
 ## Project
-DAGonWeb is a Flask/Bootstrap Progressive Web Application for creating, editing, and locally executing DAGonStar-style workflows with a Galaxy-inspired visual editor.
+DAGonWeb is a Flask/Bootstrap Progressive Web Application for creating, editing, importing, exporting, and executing DAGonStar workflows with a visual editor.
 
 ## Goals
 - Keep the project simple, readable, and deployable with Docker Compose.
-- Preserve the workflow data model: workflows contain tasks and directed links; each link creates a `workflow://<task>/<output>` dependency expression.
+- Use DAGonStar as the execution runtime. Build dependencies from `workflow:///<task>/<path>` references, not from imported `prevs` or `nexts` fields.
+- Preserve the DAGonStar task-map JSON document (`tasks` keyed by task name). DAGonWeb metadata may live only in the additive `dagonweb` extension.
 - Use SQLAlchemy models and migrations for persistent state.
 - Use role-based access: `admin` can manage users, roles, workflows, and settings; `user` can manage own workflows and runs.
 - Treat scratch directories as potentially sensitive. Never expose arbitrary filesystem paths outside the configured scratch root.
@@ -38,6 +39,6 @@ pytest
 
 ## Review checklist
 - Does the change preserve ownership/admin permissions?
-- Does the executor keep all files inside the configured scratch directory?
-- Does the visual editor save `workflow://` references for links?
+- Does the executor use DAGonStar `launch()` / `wait()` and keep files inside the configured scratch directory?
+- Does the editor derive links from `workflow:///` references and save the DAGonStar document format?
 - Does the PWA still load `manifest.webmanifest` and register the service worker?

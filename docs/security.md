@@ -8,7 +8,7 @@ Important safeguards included:
 - CSRF protection for forms and API save operations.
 - Role-based admin checks.
 - Ownership checks for workflow editing.
-- Scratch file browsing restricted to the configured scratch root.
+- Task-run scratch browsing, preview, file downloads, and ZIP archives restricted to the authorized task scratch root.
 
 Production hardening recommendations:
 

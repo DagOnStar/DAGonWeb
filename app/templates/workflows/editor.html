@@ -7,4 +7,4 @@
   <div id="workspace"><svg id="links"></svg></div>
   <div id="inspector" class="card"><div id="inspectorResizer" title="Drag to resize the inspector"></div><div class="card-header">Inspector</div><div class="card-body"><p class="text-muted">Select a task.</p></div></div>
 </div>
-{% endblock %}{% block scripts %}<script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.36.5/ace.min.js" integrity="sha512-5ANmLDCGz9L/9uVOheGFbMtixl3u91bZEWOfDDcsAjbP9YLQzP5qQuT2xIrpo6Yp9q/aZBaPKbQesVcx+53dcA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script><script src="{{ url_for('static', filename='js/editor.js') }}"></script>{% endblock %}
+{% endblock %}{% block scripts %}<script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.36.5/ace.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script><script src="{{ url_for('static', filename='js/editor.js') }}"></script>{% endblock %}

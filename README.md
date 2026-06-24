@@ -2,7 +2,7 @@
 
 DAGonWeb is a Flask/Bootstrap Progressive Web Application for designing and executing DAGonStar workflows through a visual editor.
 
-The application lets users register, manage workflows, place tasks from a palette, connect tasks visually, and run workflows locally using a configurable scratch directory. Each visual link creates a DAGonStar-like `workflow://<task>/<output>` relationship that is persisted with the workflow graph.
+The application lets users register, manage workflows, place tasks from a palette, connect tasks visually, and run them with the DAGonStar runtime using a configurable scratch directory. Dependencies come from DAGonStar `workflow:///task/path` references.
 
 ## Inspiration
 
@@ -15,9 +15,10 @@ DAGonStar is a lightweight Python workflow engine for directed acyclic graphs th
 - User registration and authentication.
 - Role-based authorization with `admin` and `user` roles.
 - CRUD for users, roles, workflow metadata, and workflow graphs.
-- Visual editor with a task palette, workspace, visual links, and task inspector.
-- Task types: Input, Bash, Python, DAGonStar Native metadata stub, LLM metadata stub.
-- Local execution with per-run and per-task scratch directories.
+- Visual editor with draggable nodes, curved connectors, auto-layout, and a resizable inspector.
+- DAGonStar task types: Checkpoint, Batch, Slurm, Cloud, Docker, LLM, Native, and Web.
+- DAGonStar JSON import/export and direct Python workflow generation.
+- Asynchronous server-side runs with live task status and scratch artifact browsing/downloads.
 - Admin setup panel for scratch directory path.
 - Docker Compose deployment with an external mounted scratch directory.
 - SQLite default, with PostgreSQL and MySQL examples.
@@ -60,6 +61,7 @@ flask --app wsgi run --debug
 See:
 
 - [Getting started](docs/getting_started.md)
+- [User manual](docs/user_manual.md)
 - [Installation](docs/installation.md)
 - [Configuration](docs/configuration.md)
 - [Architecture](docs/architecture.md)
