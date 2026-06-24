@@ -240,20 +240,73 @@ def download_workflow_python(workflow_id: int):
     if not can_access(workflow):
         abort(403)
     filename = re.sub(r"[^A-Za-z0-9_-]+", "-", workflow.name).strip("-") or f"workflow-{workflow.id}"
-    document = json.dumps(workflow.as_json(), indent=2)
-    source = f'''#!/usr/bin/env python3
-"""Generated DAGonStar workflow."""
-import json
-from dagon import Workflow
+    source = workflow_python_source(workflow)
+    return Response(source, mimetype="text/x-python", headers={"Content-Disposition": f'attachment; filename="{filename}.py"'})
 
-WORKFLOW_DOCUMENT = json.loads({document!r})
+
+def workflow_python_source(workflow: Workflow) -> str:
+    """Generate an editable, direct DAGonStar Python workflow program."""
+    identifiers: dict[str, str] = {}
+    used_identifiers: set[str] = set()
+    for task in workflow.tasks:
+        base = re.sub(r"\W|^(?=\d)", "_", task.name)
+        identifier = f"task_{base}" or "task"
+        suffix = 2
+        while identifier in used_identifiers:
+            identifier = f"task_{base}_{suffix}"
+            suffix += 1
+        identifiers[task.name] = identifier
+        used_identifiers.add(identifier)
+
+    declarations: list[str] = []
+    for task in workflow.tasks:
+        config = task.config
+        task_type = task.normalized_task_type.upper()
+        identifier = identifiers[task.name]
+        if task_type == "NATIVE":
+            declarations.append(f"{identifier} = DagonTask(TaskType.NATIVE, {task.name!r}, {config.get('callable', '')!r}, inputs={config.get('inputs', {})!r}, outputs={config.get('outputs', {})!r})")
+        elif task_type == "WEB":
+            specification = {key: value for key, value in config.items() if key != "inputs"}
+            declarations.append(f"{identifier} = DagonTask(TaskType.WEB, {task.name!r}, {specification!r})")
+        elif task_type == "LLM":
+            declarations.append(f"{identifier} = DagonTask(TaskType.LLM, {task.name!r}, {config.get('prompt', '')!r}, provider={config.get('provider')!r})")
+        else:
+            declarations.append(f"{identifier} = DagonTask(TaskType.{task_type}, {task.name!r}, {config.get('command', '')!r})")
+
+    additions = "\n".join(f"    workflow.add_task({identifiers[task.name]})" for task in workflow.tasks)
+    return f'''#!/usr/bin/env python3
+"""Generated DAGonStar workflow: {workflow.name}."""
+from pathlib import Path
+from dagon import Workflow
+from dagon.task import DagonTask, TaskType
+
+
+def local_config(workdir: Path) -> dict:
+    """Return a local DAGonStar configuration rooted at ``workdir``."""
+    return {{
+        "batch": {{"scratch_dir_base": str(workdir), "remove_dir": False}},
+        "ftp_pub": {{}},
+        "dagon_service": {{"use": "False"}},
+    }}
+
+
+def build_workflow(workdir: Path) -> Workflow:
+    # DAGonStar derives dependencies from workflow:/// references in commands.
+    workflow = Workflow({workflow.name!r}, config=local_config(workdir))
+
+    # Task declarations
+{chr(10).join('    ' + declaration for declaration in declarations)}
+
+    # Register tasks before DAGonStar discovers workflow:// dependencies.
+{additions}
+    workflow.make_dependencies()
+    return workflow
+
 
 if __name__ == "__main__":
-    workflow = Workflow(WORKFLOW_DOCUMENT["name"], jsonload=WORKFLOW_DOCUMENT)
-    workflow.launch()
-    workflow.wait()
+    workflow = build_workflow(Path.cwd() / "scratch")
+    workflow.run()
 '''
-    return Response(source, mimetype="text/x-python", headers={"Content-Disposition": f'attachment; filename="{filename}.py"'})
 
 
 @bp.post("/upload")

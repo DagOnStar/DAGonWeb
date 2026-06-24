@@ -8,7 +8,7 @@ import pytest
 
 from app.executor.local import execute_task, safe_child
 from app.models import TASK_TYPE_LABELS, Role, TaskRun, TaskType, User, Workflow, WorkflowLink, WorkflowRun, WorkflowTask
-from app.workflows.routes import apply_import_layout, validate_graph_payload
+from app.workflows.routes import apply_import_layout, validate_graph_payload, workflow_python_source
 
 
 def make_app():
@@ -69,6 +69,17 @@ def test_workflow_json_download_and_upload_round_trip():
         imported_task = imported.as_json()["tasks"]["checkpoint"]
         assert imported_task["type"] == document["tasks"]["checkpoint"]["type"]
         assert imported_task["dagonweb"]["config"] == document["tasks"]["checkpoint"]["dagonweb"]["config"]
+
+
+def test_python_generator_creates_direct_dagonstar_task_code():
+    workflow = Workflow(id=7, owner_id=1, name="Example")
+    task = WorkflowTask(uid="a", label="a", task_type="batch")
+    task.config = {"command": "echo hello > a.txt"}
+    workflow.tasks.append(task)
+    source = workflow_python_source(workflow)
+    assert "DagonTask(TaskType.BATCH, 'a', 'echo hello > a.txt')" in source
+    assert "workflow.add_task(task_a)" in source
+    compile(source, "generated_workflow.py", "exec")
 
 
 def test_graph_validation_rejects_cycles_and_unknown_tasks():
