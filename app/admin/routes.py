@@ -1,9 +1,13 @@
 from functools import wraps
-from flask import Blueprint, abort, flash, redirect, render_template, url_for
+from configparser import ConfigParser, Error as ConfigParserError
+from pathlib import Path
+
+from flask import Blueprint, abort, current_app, flash, redirect, render_template, url_for
 from flask_login import current_user, login_required
 from ..extensions import db
+from ..dagon_ini import DEFAULT_DAGON_INI
 from ..models import Role, Setting, User, Workflow
-from .forms import RoleForm, SettingsForm, UserForm
+from .forms import DagonIniForm, RoleForm, SettingsForm, UserForm
 
 bp = Blueprint("admin", __name__)
 
@@ -33,6 +37,37 @@ def settings():
         flash("Settings saved.", "success")
         return redirect(url_for("admin.settings"))
     return render_template("admin/settings.html", form=form)
+
+
+def dagon_ini_path() -> Path:
+    """Return the one application-managed DAGonStar configuration file."""
+    return Path(current_app.config["DAGON_INI_PATH"]).resolve()
+
+
+@bp.route("/dagon-ini", methods=["GET", "POST"])
+@admin_required
+def dagon_ini():
+    path = dagon_ini_path()
+    content = path.read_text(encoding="utf-8") if path.is_file() else DEFAULT_DAGON_INI
+    form = DagonIniForm(content=content)
+    if form.validate_on_submit():
+        content = form.content.data or ""
+        if "\0" in content:
+            form.content.errors.append("The configuration cannot contain null bytes.")
+        else:
+            parser = ConfigParser(interpolation=None)
+            try:
+                parser.read_string(content)
+            except ConfigParserError as exc:
+                form.content.errors.append(f"Invalid INI configuration: {exc}")
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temporary_path = path.with_suffix(path.suffix + ".tmp")
+                temporary_path.write_text(content.rstrip() + "\n", encoding="utf-8")
+                temporary_path.replace(path)
+                flash("dagon.ini saved. New workflow runs will use it.", "success")
+                return redirect(url_for("admin.dagon_ini"))
+    return render_template("admin/dagon_ini.html", form=form, path=path)
 
 @bp.route("/roles")
 @admin_required

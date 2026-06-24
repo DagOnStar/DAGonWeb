@@ -87,7 +87,7 @@ def validate_graph_payload(payload: object) -> tuple[list[dict], list[dict]]:
     existing_links = {(link.get("source_name"), link.get("source_output", "output"), link.get("target_name"), link.get("target_input", "input")) for link in links if isinstance(link, dict)}
     existing_edges = {(link.get("source_name"), link.get("target_name")) for link in links if isinstance(link, dict)}
     for task in tasks:
-        for source_uid, source_output, target_input in workflow_references(task.get("config", {})):
+        for source_uid, source_output, target_input in task_workflow_references(task):
             if source_uid not in names:
                 raise ValueError("Workflow reference points to a missing task.")
             link = {"source_name": source_uid, "source_output": source_output, "target_name": task["name"], "target_input": target_input}
@@ -132,6 +132,14 @@ def workflow_references(value: object, input_name: str = "input") -> list[tuple[
     elif isinstance(value, str):
         references.extend((match.group(1), match.group(2), input_name) for match in WORKFLOW_REFERENCE.finditer(value))
     return references
+
+
+def task_workflow_references(task: dict) -> list[tuple[str, str, str]]:
+    """Return executable workflow references, excluding embedded Native source code."""
+    config = task.get("config", {})
+    if task.get("task_type") == TaskType.NATIVE.value and isinstance(config, dict):
+        config = {key: value for key, value in config.items() if key != "source"}
+    return workflow_references(config)
 
 
 def apply_workflow_document(workflow: Workflow, document: object, auto_layout: bool = False) -> None:
@@ -235,8 +243,8 @@ def save_graph(workflow_id):
         abort(403)
     try:
         apply_workflow_document(wf, request.get_json(force=True))
-    except (ValueError, TypeError):
-        return jsonify({"error": "Invalid workflow graph."}), 400
+    except (ValueError, TypeError) as exc:
+        return jsonify({"error": str(exc)}), 400
     db.session.commit()
     return jsonify({"status": "ok", "workflow": wf.as_json()})
 

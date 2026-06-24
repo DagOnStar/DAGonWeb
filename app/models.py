@@ -113,6 +113,20 @@ class Workflow(TimestampMixin, db.Model):
             # portable and editable by DAGonWeb.
             if task.normalized_task_type == "web":
                 tasks[task.name]["specification"] = config
+            elif task.normalized_task_type == "llm":
+                # LLM tasks keep their Chat Completions request in ``command``
+                # and their runtime settings at the task level, as expected by
+                # DAGonStar's JSON loader.  The full editor configuration stays
+                # in the additive dagonweb extension above.
+                prompt = config.get("prompt", {})
+                tasks[task.name]["command"] = json.dumps(prompt) if isinstance(prompt, dict) else prompt
+                tasks[task.name].update({
+                    "provider": config.get("provider", ""),
+                    "params": config.get("params", {}),
+                    "input_files": config.get("input_files", config.get("inputs", {})),
+                    "output_file": config.get("output_file", "response.json"),
+                    "timeout": config.get("timeout", 120),
+                })
             elif task.normalized_task_type == "native":
                 # NativeTask's JSON loader expects its bindings at the task
                 # level, rather than inside DAGonWeb's editor extension.

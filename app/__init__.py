@@ -4,6 +4,7 @@ import os
 from flask import Flask, redirect, url_for
 from flask_login import current_user
 from .config import Config
+from .dagon_ini import DEFAULT_DAGON_INI
 from .extensions import db, migrate, login_manager, csrf
 from .models import Role, Setting, User
 
@@ -13,6 +14,11 @@ def create_app(config_object: type[Config] = Config) -> Flask:
     app.config.from_object(config_object)
     os.makedirs(app.instance_path, exist_ok=True)
     os.makedirs(app.config["SCRATCH_DIR"], exist_ok=True)
+    dagon_ini_path = os.path.abspath(app.config["DAGON_INI_PATH"])
+    os.makedirs(os.path.dirname(dagon_ini_path), exist_ok=True)
+    if not os.path.exists(dagon_ini_path):
+        with open(dagon_ini_path, "w", encoding="utf-8") as dagon_ini_file:
+            dagon_ini_file.write(DEFAULT_DAGON_INI)
 
     db.init_app(app)
     migrate.init_app(app, db)

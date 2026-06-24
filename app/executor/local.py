@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 import networkx as nx
 from flask import current_app
+from ..dagon_ini import runtime_dagon_config
 from ..extensions import db
 from ..models import LEGACY_TASK_TYPES, RunStatus, Setting, TaskRun, Workflow, WorkflowRun
 
@@ -143,7 +144,7 @@ def execute_workflow(workflow: Workflow, user_id: int, run: WorkflowRun | None =
         prepare_native_task_environments(workflow, root, runtime_document)
         runtime = DagonStarWorkflow(
             workflow.name,
-            config={"batch": {"scratch_dir_base": str(root), "remove_dir": False}, "ftp_pub": {}, "dagon_service": {"use": "False"}},
+            config=runtime_dagon_config(Path(current_app.config["DAGON_INI_PATH"]), root),
             jsonload=runtime_document,
         )
         if module_root:

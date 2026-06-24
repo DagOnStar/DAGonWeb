@@ -1,5 +1,6 @@
 import io
 import json
+from pathlib import Path
 
 from app import create_app, seed_defaults
 from app.config import TestConfig
@@ -7,6 +8,7 @@ from app.extensions import db
 import pytest
 
 from app.executor.local import dagonstar_document, execute_task, materialize_native_sources, prepare_native_task_environments, safe_child
+from app.dagon_ini import runtime_dagon_config
 from app.models import TASK_TYPE_LABELS, Role, Setting, TaskRun, TaskType, User, Workflow, WorkflowLink, WorkflowRun, WorkflowTask
 from app.workflows.routes import apply_import_layout, validate_graph_payload, workflow_python_source
 
@@ -25,6 +27,37 @@ def test_seed_creates_admin_and_roles():
         assert Role.query.filter_by(name="admin").first() is not None
         assert Role.query.filter_by(name="user").first() is not None
         assert User.query.filter_by(email="admin@example.org").first() is not None
+
+
+def test_admin_can_edit_dagon_ini_and_runtime_preserves_scratch_safety(tmp_path):
+    app = make_app()
+    app.config["DAGON_INI_PATH"] = str(tmp_path / "dagon.ini")
+    with app.app_context():
+        admin = User.query.filter_by(email="admin@example.org").one()
+        admin_id = str(admin.id)
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = admin_id
+        session["_fresh"] = True
+    response = client.post("/admin/dagon-ini", data={"content": "[batch]\nthreads = 4\nscratch_dir_base = /unsafe\n\n[dagon_service]\nuse = True\n"})
+    assert response.status_code == 302
+    config = runtime_dagon_config(Path(app.config["DAGON_INI_PATH"]), tmp_path / "scratch")
+    assert config["batch"] == {"threads": "4", "scratch_dir_base": str(tmp_path / "scratch"), "remove_dir": False}
+    assert config["dagon_service"]["use"] == "True"
+
+
+def test_dagon_ini_editor_rejects_invalid_ini():
+    app = make_app()
+    with app.app_context():
+        admin_id = str(User.query.filter_by(email="admin@example.org").one().id)
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = admin_id
+        session["_fresh"] = True
+    response = client.post("/admin/dagon-ini", data={"content": "not an ini section"})
+    assert response.status_code == 200
+    assert b"Invalid INI configuration" in response.data
 
 
 def test_workflow_link_uri_contract():
@@ -101,6 +134,28 @@ def test_web_task_serializes_native_dagonstar_specification():
         jsonload=runtime_document,
     )
     assert runtime.tasks[0].specification["url"] == specification["url"]
+
+
+def test_llm_task_serializes_dagonstar_bindings():
+    workflow = Workflow(id=9, owner_id=1, name="LLM bindings")
+    task = WorkflowTask(uid="review", label="review", task_type="llm")
+    task.config = {
+        "provider": "research",
+        "prompt": {"messages": [{"role": "user", "content": "Review {report}"}], "temperature": 0.2},
+        "params": {"style": "brief"},
+        "input_files": {"report": "workflow:///prepare/report.txt"},
+        "output_file": "outputs/review.json",
+        "timeout": 45,
+    }
+    workflow.tasks.append(task)
+
+    document = workflow.as_json()["tasks"]["review"]
+
+    assert json.loads(document["command"])["messages"][0]["content"] == "Review {report}"
+    assert document["provider"] == "research"
+    assert document["input_files"] == {"report": "workflow:///prepare/report.txt"}
+    assert document["output_file"] == "outputs/review.json"
+    assert document["timeout"] == 45
 
 
 def test_native_task_serializes_dagonstar_bindings():
@@ -200,6 +255,11 @@ def test_graph_validation_rejects_cycles_and_unknown_tasks():
 def test_graph_validation_creates_links_from_workflow_references():
     _, links = validate_graph_payload({"tasks": {"source": {"name": "source", "type": "checkpoint"}, "target": {"name": "target", "type": "batch", "dagonweb": {"config": {"inputs": {"dataset": "workflow:///source/output"}}}}}})
     assert links == [{"source_name": "source", "source_output": "output", "target_name": "target", "target_input": "dataset"}]
+
+
+def test_graph_validation_ignores_workflow_examples_in_native_source():
+    _, links = validate_graph_payload({"tasks": {"native": {"name": "native", "type": "native", "dagonweb": {"config": {"source": "# Example: workflow:///missing/output", "inputs": {}}}}}})
+    assert links == []
 
 
 def test_graph_validation_creates_links_from_dagonstar_command_references():

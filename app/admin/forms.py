@@ -18,3 +18,8 @@ class UserForm(FlaskForm):
 class SettingsForm(FlaskForm):
     scratch_dir = StringField("Scratch directory", validators=[DataRequired(), Length(max=1024)])
     submit = SubmitField("Save settings")
+
+
+class DagonIniForm(FlaskForm):
+    content = TextAreaField("dagon.ini", validators=[DataRequired(), Length(max=65536)])
+    submit = SubmitField("Save dagon.ini")
