@@ -6,7 +6,7 @@ from app.config import TestConfig
 from app.extensions import db
 import pytest
 
-from app.executor.local import dagonstar_document, execute_task, materialize_native_sources, safe_child
+from app.executor.local import dagonstar_document, execute_task, materialize_native_sources, prepare_native_task_environments, safe_child
 from app.models import TASK_TYPE_LABELS, Role, Setting, TaskRun, TaskType, User, Workflow, WorkflowLink, WorkflowRun, WorkflowTask
 from app.workflows.routes import apply_import_layout, validate_graph_payload, workflow_python_source
 
@@ -112,6 +112,7 @@ def test_native_task_serializes_dagonstar_bindings():
         "outputs": {"output_file": "scaled-values.txt"},
         "executor": "local",
         "environment": {"OMP_NUM_THREADS": "1"},
+        "requirements": "python-dateutil==2.9.0.post0\n",
     }
     workflow.tasks.append(task)
 
@@ -121,6 +122,44 @@ def test_native_task_serializes_dagonstar_bindings():
     assert document["inputs"]["input_file"] == "workflow:///produce/data/values.txt"
     assert document["outputs"] == {"output_file": "scaled-values.txt"}
     assert document["environment"] == {"OMP_NUM_THREADS": "1"}
+    assert document["dagonweb"]["config"]["requirements"] == "python-dateutil==2.9.0.post0\n"
+
+
+def test_native_task_requirements_use_task_local_virtualenv(tmp_path, monkeypatch):
+    workflow = Workflow(id=12, owner_id=1, name="Native requirements")
+    task = WorkflowTask(uid="transform", label="transform", task_type="native")
+    task.config = {"callable": "package.module:function", "requirements": "example-package==1.0\n"}
+    workflow.tasks.append(task)
+    document = {"tasks": {"transform": {"type": "native", "python": "original"}}}
+    created = []
+
+    class FakeBuilder:
+        def __init__(self, **kwargs):
+            assert kwargs == {"with_pip": True, "system_site_packages": True}
+
+        def create(self, path):
+            created.append(path)
+            (path / "bin").mkdir(parents=True)
+            (path / "bin" / "python").touch()
+
+    monkeypatch.setattr("app.executor.local.venv.EnvBuilder", FakeBuilder)
+    monkeypatch.setattr("app.executor.local.subprocess.run", lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    prepare_native_task_environments(workflow, tmp_path, document)
+
+    requirements = tmp_path / "workflow-12" / "native_environments" / "transform" / "requirements.txt"
+    assert requirements.read_text(encoding="utf-8") == "example-package==1.0\n"
+    assert created == [tmp_path / "workflow-12" / "native_environments" / "transform" / "venv"]
+    assert document["tasks"]["transform"]["python"].endswith("native_environments/transform/venv/bin/python")
+
+
+def test_native_task_requirements_reject_slurm_executor(tmp_path):
+    workflow = Workflow(id=12, owner_id=1, name="Native requirements")
+    task = WorkflowTask(uid="transform", label="transform", task_type="native")
+    task.config = {"callable": "package.module:function", "requirements": "example-package==1.0", "executor": "slurm"}
+    workflow.tasks.append(task)
+
+    with pytest.raises(ValueError, match="local executor"):
+        prepare_native_task_environments(workflow, tmp_path, {"tasks": {"transform": {}}})
 
 
 def test_native_source_is_materialized_as_an_importable_module(tmp_path):

@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import venv
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,38 @@ def dagonstar_document(workflow: Workflow) -> dict[str, Any]:
             # Keep the native runner in the same environment as the web app.
             task["python"] = sys.executable
     return document
+
+
+def prepare_native_task_environments(workflow: Workflow, root: Path, document: dict[str, Any]) -> None:
+    """Install each Native task's declared requirements in its own scratch venv."""
+    environment_root = safe_child(root, f"workflow-{workflow.id}", "native_environments")
+    for task in workflow.tasks:
+        if task.normalized_task_type != "native":
+            continue
+        requirements = task.config.get("requirements", "")
+        if not isinstance(requirements, str) or not requirements.strip():
+            continue
+        if task.config.get("executor", "local") != "local":
+            raise ValueError(f"Native task {task.name} requirements.txt is supported only by the local executor.")
+        if "\0" in requirements or len(requirements) > 50_000:
+            raise ValueError(f"Native task {task.name} has invalid requirements.txt content.")
+        task_root = safe_child(environment_root, task.name)
+        task_root.mkdir(parents=True, exist_ok=True)
+        requirements_path = safe_child(task_root, "requirements.txt")
+        requirements_path.write_text(requirements.rstrip() + "\n", encoding="utf-8")
+        virtualenv_root = safe_child(task_root, "venv")
+        python = virtualenv_root / "bin" / "python"
+        if not python.is_file():
+            venv.EnvBuilder(with_pip=True, system_site_packages=True).create(virtualenv_root)
+        completed = subprocess.run(
+            [str(python), "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "-r", str(requirements_path)],
+            text=True,
+            capture_output=True,
+        )
+        if completed.returncode:
+            output = (completed.stdout + completed.stderr).strip()
+            raise RuntimeError(f"Native task {task.name} requirements installation failed.\n{output}")
+        document["tasks"][task.name]["python"] = str(python)
 
 
 def materialize_native_sources(workflow: Workflow, root: Path) -> tuple[Path | None, set[str]]:
@@ -106,10 +139,12 @@ def execute_workflow(workflow: Workflow, user_id: int, run: WorkflowRun | None =
             for module in modules:
                 sys.modules.pop(module, None)
 
+        runtime_document = dagonstar_document(workflow)
+        prepare_native_task_environments(workflow, root, runtime_document)
         runtime = DagonStarWorkflow(
             workflow.name,
             config={"batch": {"scratch_dir_base": str(root), "remove_dir": False}, "ftp_pub": {}, "dagon_service": {"use": "False"}},
-            jsonload=dagonstar_document(workflow),
+            jsonload=runtime_document,
         )
         if module_root:
             sys.path.remove(str(module_root))
