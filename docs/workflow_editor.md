@@ -1,6 +1,6 @@
 # Workflow editor
 
-The editor follows a Galaxy-like layout:
+The editor uses a three-panel workflow layout:
 
 - Left: task palette.
 - Center: workflow canvas.

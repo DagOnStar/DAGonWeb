@@ -3,6 +3,8 @@
 <h1>Run {{ run.id }} · {{ run.status }}</h1>
 <p><strong>Scratch:</strong> <code>{{ run.scratch_path }}</code></p>
 <pre class="bg-light p-3">{{ run.log }}</pre>
+<h2 class="h4">Workflow graph</h2>
+<div id="runGraph" class="border rounded p-3 mb-3 d-flex flex-wrap gap-2">{% for task in workflow.as_json().tasks.values() %}<button class="btn btn-outline-secondary run-task" data-name="{{ task.name }}">{{ task.name }} · pending</button>{% endfor %}</div>
 <h2 class="h4">Tasks</h2>
 <div class="accordion" id="tasks">
   {% for tr in run.task_runs %}
@@ -22,5 +24,6 @@
 {% block scripts %}
 <script>
 document.querySelectorAll('.scratch-browser').forEach(browser=>{let path='';const id=browser.dataset.taskRun;const list=browser.querySelector('.file-list'),preview=browser.querySelector('.file-preview'),pathLabel=browser.querySelector('.file-path'),up=browser.querySelector('.file-up');const url=(name,p='')=>`{{ url_for('workflows.browse_task_run_files', task_run_id=0) }}`.replace('/0/',`/${id}/`).replace('files',name)+(p?`?path=${encodeURIComponent(p)}`:'');const show=async p=>{const r=await fetch(url('files',p));if(!r.ok){list.innerHTML='<div class="list-group-item text-danger">Unable to read this directory.</div>';return}const data=await r.json();path=p;pathLabel.textContent='/'+p;up.disabled=!p;list.innerHTML=data.files.length?data.files.map(f=>`<button class="list-group-item list-group-item-action" data-name="${escapeHtml(f.name)}" data-dir="${f.is_dir}">${f.is_dir?'📁':'📄'} ${escapeHtml(f.name)} <small class="text-muted float-end">${f.is_dir?'':f.size+' B'}</small></button>`).join(''):'<div class="list-group-item text-muted">This directory is empty.</div>';list.querySelectorAll('button').forEach(b=>b.onclick=()=>{const next=path?path+'/'+b.dataset.name:b.dataset.name;if(b.dataset.dir==='true')show(next);else previewFile(next)})};const previewFile=async p=>{preview.textContent='Loading…';const r=await fetch(url('file',p));const data=await r.json();preview.textContent=r.ok?data.content:(data.error||'Unable to preview this file.')};up.onclick=()=>show(path.split('/').slice(0,-1).join('/'));browser.closest('.accordion-collapse').addEventListener('shown.bs.collapse',()=>show(path),{once:true})});function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]))}
+const poll=async()=>{const r=await fetch('{{ url_for('workflows.run_status', workflow_id=workflow.id, run_id=run.id) }}');if(!r.ok)return;const data=await r.json();if(data.tasks.length&&!document.querySelector('.accordion-item')){location.reload();return}data.tasks.forEach(task=>{const node=document.querySelector(`.run-task[data-name="${CSS.escape(task.name)}"]`);if(node){node.textContent=`${task.name} · ${task.status}`;node.className=`btn run-task ${task.status==='success'?'btn-success':task.status==='failed'?'btn-danger':task.status==='running'?'btn-primary':'btn-outline-secondary'}`;node.onclick=()=>document.querySelector(`#t${task.id}`)?.scrollIntoView({behavior:'smooth'})}});if(data.status==='running'||data.status==='pending')setTimeout(poll,1000)};poll();
 </script>
 {% endblock %}

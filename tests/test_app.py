@@ -8,7 +8,7 @@ import pytest
 
 from app.executor.local import execute_task, safe_child
 from app.models import TASK_TYPE_LABELS, Role, TaskRun, TaskType, User, Workflow, WorkflowLink, WorkflowRun, WorkflowTask
-from app.workflows.routes import validate_graph_payload
+from app.workflows.routes import apply_import_layout, validate_graph_payload
 
 
 def make_app():
@@ -58,22 +58,46 @@ def test_workflow_json_download_and_upload_round_trip():
     downloaded = client.get(f"/workflows/{workflow_id}/download")
     assert downloaded.status_code == 200
     document = json.loads(downloaded.data)
-    assert document["format"] == "dagonweb.workflow/v1"
-    assert "id" not in document
+    assert document["name"] == "Portable workflow"
+    assert set(document["tasks"]) == {"checkpoint"}
 
     document["name"] = "Imported workflow"
     uploaded = client.post("/workflows/upload", data={"workflow_file": (io.BytesIO(json.dumps(document).encode()), "workflow.json")}, content_type="multipart/form-data")
     assert uploaded.status_code == 302
     with app.app_context():
         imported = Workflow.query.filter_by(name="Imported workflow").one()
-        assert imported.as_json()["tasks"] == document["tasks"]
+        imported_task = imported.as_json()["tasks"]["checkpoint"]
+        assert imported_task["type"] == document["tasks"]["checkpoint"]["type"]
+        assert imported_task["dagonweb"]["config"] == document["tasks"]["checkpoint"]["dagonweb"]["config"]
 
 
 def test_graph_validation_rejects_cycles_and_unknown_tasks():
     with pytest.raises(ValueError, match="acyclic"):
-        validate_graph_payload({"tasks": [{"uid": "a"}, {"uid": "b"}], "links": [{"source_uid": "a", "target_uid": "b"}, {"source_uid": "b", "target_uid": "a"}]})
-    with pytest.raises(ValueError, match="existing tasks"):
-        validate_graph_payload({"tasks": [{"uid": "a"}], "links": [{"source_uid": "a", "target_uid": "missing"}]})
+        validate_graph_payload({"tasks": {"a": {"name": "a", "type": "batch", "command": "cat workflow:///b/b.txt"}, "b": {"name": "b", "type": "batch", "command": "cat workflow:///a/a.txt"}}})
+    with pytest.raises(ValueError, match="missing task"):
+        validate_graph_payload({"tasks": {"a": {"name": "a", "type": "batch", "command": "cat workflow:///missing/a.txt"}}})
+
+
+def test_graph_validation_creates_links_from_workflow_references():
+    _, links = validate_graph_payload({"tasks": {"source": {"name": "source", "type": "checkpoint"}, "target": {"name": "target", "type": "batch", "dagonweb": {"config": {"inputs": {"dataset": "workflow:///source/output"}}}}}})
+    assert links == [{"source_name": "source", "source_output": "output", "target_name": "target", "target_input": "dataset"}]
+
+
+def test_graph_validation_creates_links_from_dagonstar_command_references():
+    _, links = validate_graph_payload({"tasks": {"a": {"name": "a", "type": "batch", "command": "echo data > a.txt"}, "b": {"name": "b", "type": "batch", "command": "cat workflow:///a/a.txt > b.txt"}}})
+    assert links == [{"source_name": "a", "source_output": "a.txt", "target_name": "b", "target_input": "command"}]
+
+
+def test_dagonstar_diamond_document_ignores_explicit_edges_and_uses_references():
+    document = {"name": "Lesson00", "id": 0, "host": "localhost", "tasks": {"a": {"name": "a", "type": "batch", "command": "echo hello > a.txt", "nexts": ["b", "c"]}, "b": {"name": "b", "type": "batch", "command": "cat workflow:///a/a.txt > b.txt", "nexts": ["d"]}, "c": {"name": "c", "type": "batch", "command": "cat workflow:///a/a.txt > c.txt", "nexts": ["d"]}, "d": {"name": "d", "type": "batch", "command": "cat workflow:///b/b.txt; cat workflow:///c/c.txt", "nexts": []}}}
+    tasks, links = validate_graph_payload(document)
+    assert {task["name"] for task in tasks} == {"a", "b", "c", "d"}
+    assert {(link["source_name"], link["target_name"]) for link in links} == {("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")}
+    apply_import_layout(tasks, links)
+    positions = {task["name"]: (task["x"], task["y"]) for task in tasks}
+    assert positions["a"][0] < positions["b"][0] < positions["d"][0]
+    assert positions["b"][0] == positions["c"][0]
+    assert positions["b"][1] != positions["c"][1]
 
 
 def test_executor_rejects_failed_batch_commands_and_unsafe_paths(tmp_path):

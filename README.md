@@ -1,12 +1,12 @@
 # DAGonWeb
 
-DAGonWeb is a Flask/Bootstrap Progressive Web Application for designing and executing DAGonStar-style workflows through a Galaxy-inspired visual editor.
+DAGonWeb is a Flask/Bootstrap Progressive Web Application for designing and executing DAGonStar workflows through a visual editor.
 
 The application lets users register, manage workflows, place tasks from a palette, connect tasks visually, and run workflows locally using a configurable scratch directory. Each visual link creates a DAGonStar-like `workflow://<task>/<output>` relationship that is persisted with the workflow graph.
 
 ## Inspiration
 
-DAGonStar is a lightweight Python workflow engine for directed acyclic graphs that can run jobs on local machines, HPC clusters, containers, and clouds. Galaxy provides a mature web experience for visual scientific workflow authoring, including workflows composed from a tool panel and linked steps. DAGonWeb combines these ideas for DAGonStar-style local workflow authoring and execution.
+DAGonStar is a lightweight Python workflow engine for directed acyclic graphs that can run jobs on local machines, HPC clusters, containers, and clouds. DAGonWeb provides DAGonStar workflow authoring and execution.
 
 ## Features
 
@@ -15,7 +15,7 @@ DAGonStar is a lightweight Python workflow engine for directed acyclic graphs th
 - User registration and authentication.
 - Role-based authorization with `admin` and `user` roles.
 - CRUD for users, roles, workflow metadata, and workflow graphs.
-- Galaxy-like visual editor with a task palette, workspace, visual links, and task inspector.
+- Visual editor with a task palette, workspace, visual links, and task inspector.
 - Task types: Input, Bash, Python, DAGonStar Native metadata stub, LLM metadata stub.
 - Local execution with per-run and per-task scratch directories.
 - Admin setup panel for scratch directory path.

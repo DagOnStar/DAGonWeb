@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import re
+from threading import Thread
 from pathlib import Path
 import networkx as nx
-from flask import Blueprint, Response, abort, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, Response, abort, current_app, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 from ..extensions import db
 from ..models import TASK_TYPE_LABELS, TaskRun, TaskType, Workflow, WorkflowLink, WorkflowTask, WorkflowRun
@@ -12,6 +13,7 @@ from ..executor.local import execute_workflow, list_directory, list_files, read_
 from .forms import WorkflowForm
 
 bp = Blueprint("workflows", __name__)
+WORKFLOW_REFERENCE = re.compile(r"workflow:///([A-Za-z0-9_-]{1,80})/([^\s]+)")
 
 def can_access(workflow: Workflow) -> bool:
     return workflow.owner_id == current_user.id or current_user.has_role("admin") or workflow.is_public
@@ -27,49 +29,70 @@ def can_access_run(run: WorkflowRun) -> bool:
 def validate_graph_payload(payload: object) -> tuple[list[dict], list[dict]]:
     if not isinstance(payload, dict):
         raise ValueError("Graph payload must be an object.")
-    tasks = payload.get("tasks", [])
-    links = payload.get("links", [])
-    if not isinstance(tasks, list) or not isinstance(links, list):
-        raise ValueError("Tasks and links must be lists.")
+    task_map = payload.get("tasks")
+    if not isinstance(task_map, dict):
+        raise ValueError("DAGonStar tasks must be an object keyed by task name.")
+    tasks: list[dict] = []
+    links: list[dict] = []
+    for task_name, task_data in task_map.items():
+        if not isinstance(task_name, str) or not isinstance(task_data, dict):
+            raise ValueError("DAGonStar task entries are invalid.")
+        extension = task_data.get("dagonweb", {})
+        if not isinstance(extension, dict):
+            raise ValueError("DAGonWeb task extension must be an object.")
+        config = extension.get("config", {"command": task_data.get("command", "")})
+        tasks.append({"name": task_data.get("name", task_name), "task_type": task_data.get("type", "batch"), "x": extension.get("x", 100), "y": extension.get("y", 100), "config": config})
 
-    uids: set[str] = set()
+    names: set[str] = set()
     task_types = {task_type.value for task_type in TaskType}
     for task in tasks:
         if not isinstance(task, dict):
             raise ValueError("Each task must be an object.")
-        uid = task.get("uid")
-        if not isinstance(uid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", uid):
-            raise ValueError("Task IDs may contain only letters, numbers, underscores, and hyphens.")
-        if uid in uids:
-            raise ValueError("Task IDs must be unique.")
+        name = task.get("name")
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", name):
+            raise ValueError("Task names may contain only letters, numbers, underscores, and hyphens.")
+        if name in names:
+            raise ValueError("Task names must be unique.")
         if task.get("task_type", "batch") not in task_types:
             raise ValueError("Unsupported task type.")
         if not isinstance(task.get("config", {}), dict):
             raise ValueError("Task configuration must be an object.")
-        if "label" in task and not isinstance(task["label"], str):
-            raise ValueError("Task labels must be strings.")
         try:
             int(task.get("x", 100))
             int(task.get("y", 100))
             json.dumps(task.get("config", {}))
         except (TypeError, ValueError):
             raise ValueError("Task coordinates and configuration are invalid.") from None
-        uids.add(uid)
+        names.add(name)
+
+    normalized_links = list(links)
+    existing_links = {(link.get("source_name"), link.get("source_output", "output"), link.get("target_name"), link.get("target_input", "input")) for link in links if isinstance(link, dict)}
+    existing_edges = {(link.get("source_name"), link.get("target_name")) for link in links if isinstance(link, dict)}
+    for task in tasks:
+        for source_uid, source_output, target_input in workflow_references(task.get("config", {})):
+            if source_uid not in names:
+                raise ValueError("Workflow reference points to a missing task.")
+            link = {"source_name": source_uid, "source_output": source_output, "target_name": task["name"], "target_input": target_input}
+            key = (source_uid, source_output, task["name"], target_input)
+            if key not in existing_links and (source_uid, task["name"]) not in existing_edges:
+                normalized_links.append(link)
+                existing_links.add(key)
+                existing_edges.add((source_uid, task["name"]))
 
     graph = nx.DiGraph()
-    graph.add_nodes_from(uids)
+    graph.add_nodes_from(names)
     pairs: set[tuple[str, str, str, str]] = set()
-    for link in links:
+    for link in normalized_links:
         if not isinstance(link, dict):
             raise ValueError("Each link must be an object.")
-        source_uid = link.get("source_uid")
-        target_uid = link.get("target_uid")
+        source_uid = link.get("source_name")
+        target_uid = link.get("target_name")
         source_output = link.get("source_output", "output")
         target_input = link.get("target_input", "input")
-        if source_uid not in uids or target_uid not in uids:
+        if source_uid not in names or target_uid not in names:
             raise ValueError("Links must connect existing tasks.")
-        if not all(isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,80}", value) for value in (source_output, target_input)):
-            raise ValueError("Link input and output names may contain only letters, numbers, underscores, and hyphens.")
+        if not isinstance(source_output, str) or not re.fullmatch(r"[^\s]{1,255}", source_output) or not isinstance(target_input, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", target_input):
+            raise ValueError("Link output paths and input names are invalid.")
         pair = (source_uid, source_output, target_uid, target_input)
         if pair in pairs:
             raise ValueError("Links must be unique.")
@@ -77,21 +100,51 @@ def validate_graph_payload(payload: object) -> tuple[list[dict], list[dict]]:
         graph.add_edge(source_uid, target_uid)
     if not nx.is_directed_acyclic_graph(graph):
         raise ValueError("Workflow graph must be acyclic.")
-    return tasks, links
+    return tasks, normalized_links
 
 
-def apply_workflow_document(workflow: Workflow, document: object) -> None:
+def workflow_references(value: object, input_name: str = "input") -> list[tuple[str, str, str]]:
+    references: list[tuple[str, str, str]] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            references.extend(workflow_references(item, key if re.fullmatch(r"[A-Za-z0-9_-]{1,80}", key) else input_name))
+    elif isinstance(value, list):
+        for item in value:
+            references.extend(workflow_references(item, input_name))
+    elif isinstance(value, str):
+        references.extend((match.group(1), match.group(2), input_name) for match in WORKFLOW_REFERENCE.finditer(value))
+    return references
+
+
+def apply_workflow_document(workflow: Workflow, document: object, auto_layout: bool = False) -> None:
     tasks, links = validate_graph_payload(document)
+    if auto_layout:
+        apply_import_layout(tasks, links)
     workflow.tasks.clear()
     workflow.links.clear()
     db.session.flush()
     for task in tasks:
-        workflow_task = WorkflowTask(workflow_id=workflow.id, uid=task["uid"], label=task.get("label") or task["uid"], task_type=task.get("task_type", "batch"), x=int(task.get("x", 100)), y=int(task.get("y", 100)))
+        workflow_task = WorkflowTask(workflow_id=workflow.id, uid=task["name"], label=task["name"], task_type=task.get("task_type", "batch"), x=int(task.get("x", 100)), y=int(task.get("y", 100)))
         workflow_task.config = task.get("config", {})
         db.session.add(workflow_task)
     for link in links:
         source_output = link.get("source_output", "output")
-        db.session.add(WorkflowLink(workflow_id=workflow.id, source_uid=link["source_uid"], source_output=source_output, target_uid=link["target_uid"], target_input=link.get("target_input", "input"), workflow_uri=f"workflow://{link['source_uid']}/{source_output}"))
+        db.session.add(WorkflowLink(workflow_id=workflow.id, source_uid=link["source_name"], source_output=source_output, target_uid=link["target_name"], target_input=link.get("target_input", "input"), workflow_uri=f"workflow:///{link['source_name']}/{source_output}"))
+
+
+def apply_import_layout(tasks: list[dict], links: list[dict]) -> None:
+    graph = nx.DiGraph()
+    graph.add_nodes_from(task["name"] for task in tasks)
+    graph.add_edges_from((link["source_name"], link["target_name"]) for link in links)
+    levels: dict[str, int] = {}
+    for task_name in nx.topological_sort(graph):
+        levels[task_name] = max((levels[parent] + 1 for parent in graph.predecessors(task_name)), default=0)
+    grouped: dict[int, list[str]] = {}
+    for task_name, level in levels.items():
+        grouped.setdefault(level, []).append(task_name)
+    positions = {task_name: (120 + level * 260, 100 + index * 150) for level, names in grouped.items() for index, task_name in enumerate(sorted(names))}
+    for task in tasks:
+        task["x"], task["y"] = positions[task["name"]]
 
 @bp.route("/")
 @login_required
@@ -192,15 +245,15 @@ def upload_workflow():
         if len(raw_document) > 1_000_000:
             raise ValueError("Workflow file is too large.")
         document = json.loads(raw_document)
-        if not isinstance(document, dict) or document.get("format") != "dagonweb.workflow/v1":
-            raise ValueError("Unsupported workflow JSON format.")
+        if not isinstance(document, dict) or not isinstance(document.get("tasks"), dict):
+            raise ValueError("Unsupported DAGonStar workflow JSON format.")
         name = document.get("name")
         if not isinstance(name, str) or not name.strip() or len(name) > 255:
             raise ValueError("Workflow name is invalid.")
         workflow = Workflow(owner_id=current_user.id, name=name.strip(), description=str(document.get("description", "")), is_public=bool(document.get("is_public", False)))
         db.session.add(workflow)
         db.session.flush()
-        apply_workflow_document(workflow, document)
+        apply_workflow_document(workflow, document, auto_layout=True)
         db.session.commit()
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
         db.session.rollback()
@@ -215,8 +268,18 @@ def run_workflow(workflow_id):
     wf = db.get_or_404(Workflow, workflow_id)
     if not can_access(wf):
         abort(403)
-    run = execute_workflow(wf, current_user.id)
-    flash(f"Workflow run finished with status: {run.status}", "info")
+    run = WorkflowRun(workflow_id=wf.id, user_id=current_user.id, status="pending", scratch_path="", log="")
+    db.session.add(run)
+    db.session.commit()
+    app = current_app._get_current_object()
+    def execute_in_background() -> None:
+        with app.app_context():
+            workflow = db.session.get(Workflow, wf.id)
+            workflow_run = db.session.get(WorkflowRun, run.id)
+            if workflow and workflow_run:
+                execute_workflow(workflow, workflow_run.user_id, workflow_run)
+    Thread(target=execute_in_background, daemon=False).start()
+    flash("Workflow run started.", "info")
     return redirect(url_for("workflows.run_detail", workflow_id=wf.id, run_id=run.id))
 
 @bp.route("/<int:workflow_id>/runs/<int:run_id>")
@@ -229,6 +292,17 @@ def run_detail(workflow_id, run_id):
     if not can_access_run(run):
         abort(403)
     return render_template("workflows/run.html", workflow=wf, run=run)
+
+
+@bp.get("/<int:workflow_id>/runs/<int:run_id>/status")
+@login_required
+def run_status(workflow_id: int, run_id: int):
+    run = db.get_or_404(WorkflowRun, run_id)
+    if run.workflow_id != workflow_id:
+        abort(404)
+    if not can_access_run(run):
+        abort(403)
+    return jsonify({"status": run.status, "tasks": [{"id": task_run.id, "name": task_run.task_uid, "status": task_run.status, "scratch_path": task_run.scratch_path} for task_run in run.task_runs]})
 
 @bp.get("/files")
 @login_required

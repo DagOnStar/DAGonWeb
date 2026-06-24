@@ -32,9 +32,11 @@ TASK_TYPE_LABELS = {
     TaskType.CLOUD.value: "Cloud",
     TaskType.DOCKER.value: "Docker",
     TaskType.LLM.value: "LLM",
-    TaskType.NATIVE.value: "DAGonStar Native",
+    TaskType.NATIVE.value: "Native",
     TaskType.WEB.value: "Web",
 }
+
+LEGACY_TASK_TYPES = {"bash": TaskType.BATCH.value, "python": TaskType.BATCH.value}
 
 class RunStatus(str, Enum):
     PENDING = "pending"
@@ -92,16 +94,24 @@ class Workflow(TimestampMixin, db.Model):
     links = db.relationship("WorkflowLink", cascade="all, delete-orphan", backref="workflow", lazy="joined")
 
     def as_json(self) -> dict[str, Any]:
-        tasks = [{key: value for key, value in task.to_dict().items() if key != "id"} for task in self.tasks]
-        links = [{key: value for key, value in link.to_dict().items() if key != "id"} for link in self.links]
-        return {
-            "format": "dagonweb.workflow/v1",
-            "name": self.name,
-            "description": self.description,
-            "is_public": self.is_public,
-            "tasks": tasks,
-            "links": links,
-        }
+        tasks: dict[str, dict[str, Any]] = {}
+        for task in self.tasks:
+            config = task.config
+            tasks[task.name] = {
+                "name": task.name,
+                "status": "READY",
+                "working_dir": None,
+                "nexts": [],
+                "prevs": [],
+                "command": config.get("command", ""),
+                "type": task.normalized_task_type,
+                "dagonweb": {"x": task.x, "y": task.y, "config": config},
+            }
+        for link in self.links:
+            if link.source_uid in tasks and link.target_uid in tasks:
+                tasks[link.source_uid]["nexts"].append(link.target_uid)
+                tasks[link.target_uid]["prevs"].append(link.source_uid)
+        return {"tasks": tasks, "name": self.name, "id": self.id, "host": "localhost"}
 
     def to_graph_json(self) -> dict[str, Any]:
         """Backward-compatible alias for the portable workflow document."""
@@ -128,8 +138,21 @@ class WorkflowTask(TimestampMixin, db.Model):
     def config(self, value: dict[str, Any]) -> None:
         self.config_json = json.dumps(value, indent=2, sort_keys=True)
 
+    @property
+    def name(self) -> str:
+        return self.uid
+
+    @name.setter
+    def name(self, value: str) -> None:
+        self.uid = value
+        self.label = value
+
+    @property
+    def normalized_task_type(self) -> str:
+        return LEGACY_TASK_TYPES.get(self.task_type, self.task_type)
+
     def to_dict(self) -> dict[str, Any]:
-        return {"id": self.id, "uid": self.uid, "label": self.label, "task_type": self.task_type, "x": self.x, "y": self.y, "config": self.config}
+        return {"name": self.name, "task_type": self.normalized_task_type, "x": self.x, "y": self.y, "config": self.config}
 
 class WorkflowLink(TimestampMixin, db.Model):
     __tablename__ = "workflow_links"
