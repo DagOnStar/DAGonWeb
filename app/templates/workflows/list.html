@@ -3,18 +3,24 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center">
   <h1>Workflows</h1>
-  <div class="btn-group">
-    <a class="btn btn-primary" href="{{ url_for('workflows.create_workflow') }}">New workflow</a>
-    <button class="btn btn-primary dropdown-toggle dropdown-toggle-split" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-      <span class="visually-hidden">Choose workflow template</span>
-    </button>
-    <ul class="dropdown-menu dropdown-menu-end">
-      <li><a class="dropdown-item" href="{{ url_for('workflows.create_workflow') }}">Default empty workflow</a></li>
-      <li><hr class="dropdown-divider"></li>
-      {% for template, label in template_options %}
-        <li><a class="dropdown-item" href="{{ url_for('workflows.create_workflow', template=template) }}">{{ label }}</a></li>
-      {% endfor %}
-    </ul>
+  <div class="d-flex flex-wrap gap-2">
+    <div class="btn-group">
+      <a class="btn btn-primary" href="{{ url_for('workflows.create_workflow') }}">New workflow</a>
+      <button class="btn btn-primary dropdown-toggle dropdown-toggle-split" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+        <span class="visually-hidden">Choose workflow template</span>
+      </button>
+      <ul class="dropdown-menu dropdown-menu-end">
+        <li><a class="dropdown-item" href="{{ url_for('workflows.create_workflow') }}">Default empty workflow</a></li>
+        <li><hr class="dropdown-divider"></li>
+        {% for template, label in template_options %}
+          <li><a class="dropdown-item" href="{{ url_for('workflows.create_workflow', template=template) }}">{{ label }}</a></li>
+        {% endfor %}
+      </ul>
+    </div>
+    <form method="post" action="{{ url_for('workflows.delete_all_workflows') }}" onsubmit="return confirm('Delete all workflows you can manage, including their runs?');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-outline-danger">Delete all</button>
+    </form>
   </div>
 </div>
 
@@ -40,6 +46,7 @@
             <a class="btn btn-sm btn-primary" href="{{ url_for('workflows.editor', workflow_id=wf.id) }}">Open editor</a>
             {% if editable %}
               <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.edit_workflow', workflow_id=wf.id) }}">Edit metadata</a>
+              <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#renameWorkflow{{ wf.id }}" aria-expanded="false" aria-controls="renameWorkflow{{ wf.id }}">Rename</button>
             {% endif %}
             <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.download_workflow', workflow_id=wf.id) }}">Download JSON</a>
             <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.download_workflow_python', workflow_id=wf.id) }}">Generate Python</a>
@@ -54,6 +61,17 @@
               </form>
             {% endif %}
           </div>
+          {% if editable %}
+            <form id="renameWorkflow{{ wf.id }}" class="collapse mt-3" method="post" action="{{ url_for('workflows.rename_workflow', workflow_id=wf.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <label class="form-label" for="workflowName{{ wf.id }}">Workflow name</label>
+              <div class="input-group input-group-sm">
+                <input id="workflowName{{ wf.id }}" class="form-control" name="name" value="{{ wf.name }}" pattern="[A-Za-z0-9_-]{1,80}" maxlength="80" required>
+                <button class="btn btn-outline-primary">Save</button>
+              </div>
+              <div class="form-text">Use letters, numbers, underscores, and hyphens.</div>
+            </form>
+          {% endif %}
         </div>
       </div>
     </div>

@@ -9,4 +9,4 @@ All workflow endpoints require an authenticated user and enforce ownership or ad
 - `GET /workflows/<id>/python` downloads generated DAGonStar Python source.
 - `GET /workflows/<id>/runs/<run>/status` returns the persisted live run/task statuses.
 
-The graph document uses `tasks` keyed by task name. Each task has DAGonStar fields such as `type`, `command`, `nexts`, and `prevs`; editor position and configuration are stored under the additive `dagonweb` object. Imports ignore `nexts`/`prevs` and infer links exclusively from `workflow:///producer/path` references.
+The graph document uses `tasks` keyed by task name. Each task has DAGonStar fields such as `type`, `command`, `nexts`, and `prevs`; editor position and configuration are stored under the additive `dagonweb` object. Imports ignore `nexts`/`prevs` and infer local links from `workflow:///producer/path` and `workflow://current_workflow/producer/path` references. References to other workflow names are preserved in task configuration but are not rendered as local graph links.

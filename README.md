@@ -14,7 +14,7 @@ DAGonStar is a lightweight Python workflow engine for directed acyclic graphs th
 - PWA manifest and service worker.
 - User registration and authentication.
 - Role-based authorization with `admin` and `user` roles.
-- CRUD for users, roles, workflow metadata, and workflow graphs.
+- CRUD for users, roles, workflow metadata, and workflow graphs, including workflow rename and bulk delete controls.
 - Visual editor with draggable nodes, curved connectors, auto-layout, and a resizable/expandable inspector.
 - DAGonStar task types: Checkpoint, Batch, Slurm, Cloud, Docker, LLM, Native, and Web.
 - Native task output mappings are passed to the Python callable as keyword arguments, so demo callables write their declared output files directly.

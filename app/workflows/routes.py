@@ -13,10 +13,35 @@ from flask_login import current_user, login_required
 from ..extensions import db
 from ..models import TASK_TYPE_LABELS, TaskRun, TaskType, Workflow, WorkflowLink, WorkflowTask, WorkflowRun
 from ..executor.local import execute_workflow, list_directory, list_files, preview_task_file, safe_child, scratch_root
-from .forms import RunForm, WorkflowForm
+from .forms import DAGONSTAR_NAME_RE, WorkflowForm, RunForm
 
 bp = Blueprint("workflows", __name__)
-WORKFLOW_REFERENCE = re.compile(r"workflow:///([A-Za-z0-9_-]{1,80})/([^\s]+)")
+WORKFLOW_REFERENCE = re.compile(r"workflow://(?P<workflow>[A-Za-z0-9_-]{0,80})/(?P<task>[A-Za-z0-9_-]{1,80})/(?P<path>[^\s;]+)")
+
+
+def validate_dagonstar_name(name: str, label: str = "Name") -> str:
+    value = name.strip()
+    if not re.fullmatch(DAGONSTAR_NAME_RE, value) or len(value) > 80:
+        raise ValueError(f"{label} may contain only letters, numbers, underscores, and hyphens.")
+    return value
+
+
+def is_safe_workflow_path(path: str) -> bool:
+    if not path or len(path) > 255 or path.startswith("/"):
+        return False
+    parts = path.split("/")
+    return all(part not in {"", ".", ".."} and re.fullmatch(r"[A-Za-z0-9_.-]+", part) for part in parts)
+
+
+def rewrite_workflow_reference_names(value: object, old_name: str, new_name: str) -> object:
+    """Update named same-workflow references after a workflow rename."""
+    if isinstance(value, dict):
+        return {key: rewrite_workflow_reference_names(item, old_name, new_name) for key, item in value.items()}
+    if isinstance(value, list):
+        return [rewrite_workflow_reference_names(item, old_name, new_name) for item in value]
+    if isinstance(value, str):
+        return re.sub(rf"workflow://{re.escape(old_name)}(?=/)", f"workflow://{new_name}", value)
+    return value
 
 
 def workflow_template_options() -> list[tuple[str, str]]:
@@ -62,9 +87,9 @@ def apply_workflow_template(workflow: Workflow, template: str) -> None:
     links: set[tuple[str, str]] = set()
     for task in workflow.tasks:
         task_data = {"name": task.name, "task_type": task.normalized_task_type, "config": task.config}
-        for source_uid, source_output, target_input in task_workflow_references(task_data):
+        for workflow_name, source_uid, source_output, target_input in task_workflow_references(task_data, workflow.name):
             key = (source_uid, task.name)
-            if source_uid in task_names and key not in links:
+            if workflow_name in {"", workflow.name} and source_uid in task_names and key not in links:
                 links.add(key)
                 db.session.add(
                     WorkflowLink(
@@ -109,6 +134,9 @@ def validate_graph_payload(payload: object) -> tuple[list[dict], list[dict]]:
     task_map = payload.get("tasks")
     if not isinstance(task_map, dict):
         raise ValueError("DAGonStar tasks must be an object keyed by task name.")
+    current_workflow_name = payload.get("name", "")
+    if not isinstance(current_workflow_name, str):
+        current_workflow_name = ""
     tasks: list[dict] = []
     links: list[dict] = []
     for task_name, task_data in task_map.items():
@@ -146,7 +174,12 @@ def validate_graph_payload(payload: object) -> tuple[list[dict], list[dict]]:
     existing_links = {(link.get("source_name"), link.get("source_output", "output"), link.get("target_name"), link.get("target_input", "input")) for link in links if isinstance(link, dict)}
     existing_edges = {(link.get("source_name"), link.get("target_name")) for link in links if isinstance(link, dict)}
     for task in tasks:
-        for source_uid, source_output, target_input in task_workflow_references(task):
+        for workflow_name, source_uid, source_output, target_input in task_workflow_references(task, current_workflow_name):
+            if not is_safe_workflow_path(source_output) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", target_input):
+                raise ValueError("Workflow reference paths and input names may not contain spaces or unsafe path segments.")
+            is_current_workflow = workflow_name in {"", current_workflow_name}
+            if not is_current_workflow:
+                continue
             if source_uid not in names:
                 raise ValueError("Workflow reference points to a missing task.")
             link = {"source_name": source_uid, "source_output": source_output, "target_name": task["name"], "target_input": target_input}
@@ -168,8 +201,8 @@ def validate_graph_payload(payload: object) -> tuple[list[dict], list[dict]]:
         target_input = link.get("target_input", "input")
         if source_uid not in names or target_uid not in names:
             raise ValueError("Links must connect existing tasks.")
-        if not isinstance(source_output, str) or not re.fullmatch(r"[^\s]{1,255}", source_output) or not isinstance(target_input, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", target_input):
-            raise ValueError("Link output paths and input names are invalid.")
+        if not isinstance(source_output, str) or not is_safe_workflow_path(source_output) or not isinstance(target_input, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", target_input):
+            raise ValueError("Link output paths and input names may not contain spaces or unsafe path segments.")
         pair = (source_uid, source_output, target_uid, target_input)
         if pair in pairs:
             raise ValueError("Links must be unique.")
@@ -180,8 +213,8 @@ def validate_graph_payload(payload: object) -> tuple[list[dict], list[dict]]:
     return tasks, normalized_links
 
 
-def workflow_references(value: object, input_name: str = "input") -> list[tuple[str, str, str]]:
-    references: list[tuple[str, str, str]] = []
+def workflow_references(value: object, input_name: str = "input") -> list[tuple[str, str, str, str]]:
+    references: list[tuple[str, str, str, str]] = []
     if isinstance(value, dict):
         for key, item in value.items():
             references.extend(workflow_references(item, key if re.fullmatch(r"[A-Za-z0-9_-]{1,80}", key) else input_name))
@@ -189,11 +222,11 @@ def workflow_references(value: object, input_name: str = "input") -> list[tuple[
         for item in value:
             references.extend(workflow_references(item, input_name))
     elif isinstance(value, str):
-        references.extend((match.group(1), match.group(2), input_name) for match in WORKFLOW_REFERENCE.finditer(value))
+        references.extend((match.group("workflow"), match.group("task"), match.group("path"), input_name) for match in WORKFLOW_REFERENCE.finditer(value))
     return references
 
 
-def task_workflow_references(task: dict) -> list[tuple[str, str, str]]:
+def task_workflow_references(task: dict, current_workflow_name: str = "") -> list[tuple[str, str, str, str]]:
     """Return executable workflow references, excluding embedded Native source code."""
     config = task.get("config", {})
     if task.get("task_type") == TaskType.NATIVE.value and isinstance(config, dict):
@@ -249,7 +282,8 @@ def create_workflow():
             if template not in template_labels:
                 raise ValueError("Unknown workflow template.")
             label = template_labels[template]
-            wf = Workflow(owner_id=current_user.id, name=f"New {label} workflow", description=f"Started from the {label} template.", is_public=False)
+            workflow_name = validate_dagonstar_name(f"New_{template}_workflow", "Workflow name")
+            wf = Workflow(owner_id=current_user.id, name=workflow_name, description=f"Started from the {label} template.", is_public=False)
             db.session.add(wf)
             db.session.flush()
             apply_workflow_template(wf, template)
@@ -262,7 +296,7 @@ def create_workflow():
         return redirect(url_for("workflows.editor", workflow_id=wf.id))
     form = WorkflowForm()
     if form.validate_on_submit():
-        wf = Workflow(owner_id=current_user.id, name=form.name.data, description=form.description.data or "", is_public=form.is_public.data)
+        wf = Workflow(owner_id=current_user.id, name=validate_dagonstar_name(form.name.data, "Workflow name"), description=form.description.data or "", is_public=form.is_public.data)
         db.session.add(wf)
         db.session.commit()
         flash("Workflow created.", "success")
@@ -277,13 +311,35 @@ def edit_workflow(workflow_id):
         abort(403)
     form = WorkflowForm(obj=wf)
     if form.validate_on_submit():
-        wf.name = form.name.data
+        wf.name = validate_dagonstar_name(form.name.data, "Workflow name")
         wf.description = form.description.data or ""
         wf.is_public = form.is_public.data
         db.session.commit()
         flash("Workflow updated.", "success")
         return redirect(url_for("workflows.list_workflows"))
     return render_template("workflows/form.html", form=form, title="Edit workflow")
+
+
+@bp.post("/<int:workflow_id>/rename")
+@login_required
+def rename_workflow(workflow_id: int):
+    wf = db.get_or_404(Workflow, workflow_id)
+    if not can_edit(wf):
+        abort(403)
+    try:
+        old_name = wf.name
+        new_name = validate_dagonstar_name(request.form.get("name", ""), "Workflow name")
+    except ValueError as exc:
+        flash(str(exc), "danger")
+        return redirect(url_for("workflows.list_workflows"))
+    if new_name != old_name:
+        for task in wf.tasks:
+            task.config = rewrite_workflow_reference_names(task.config, old_name, new_name)
+        wf.name = new_name
+    db.session.commit()
+    flash("Workflow renamed.", "success")
+    return redirect(url_for("workflows.list_workflows"))
+
 
 @bp.post("/<int:workflow_id>/delete")
 @login_required
@@ -295,6 +351,21 @@ def delete_workflow(workflow_id):
     db.session.commit()
     flash("Workflow deleted.", "success")
     return redirect(url_for("workflows.list_workflows"))
+
+
+@bp.post("/delete-all")
+@login_required
+def delete_all_workflows():
+    query = Workflow.query
+    if not current_user.has_role("admin"):
+        query = query.filter(Workflow.owner_id == current_user.id)
+    workflows = query.all()
+    for workflow in workflows:
+        db.session.delete(workflow)
+    db.session.commit()
+    flash(f"Deleted {len(workflows)} workflow{'s' if len(workflows) != 1 else ''}.", "success")
+    return redirect(url_for("workflows.list_workflows"))
+
 
 @bp.route("/<int:workflow_id>/editor")
 @login_required
@@ -428,9 +499,9 @@ def upload_workflow():
         if not isinstance(document, dict) or not isinstance(document.get("tasks"), dict):
             raise ValueError("Unsupported DAGonStar workflow JSON format.")
         name = document.get("name")
-        if not isinstance(name, str) or not name.strip() or len(name) > 255:
+        if not isinstance(name, str):
             raise ValueError("Workflow name is invalid.")
-        workflow = Workflow(owner_id=current_user.id, name=name.strip(), description=str(document.get("description", "")), is_public=bool(document.get("is_public", False)))
+        workflow = Workflow(owner_id=current_user.id, name=validate_dagonstar_name(name, "Workflow name"), description=str(document.get("description", "")), is_public=bool(document.get("is_public", False)))
         db.session.add(workflow)
         db.session.flush()
         apply_workflow_document(workflow, document, auto_layout=True)

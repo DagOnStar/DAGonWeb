@@ -75,7 +75,7 @@ def test_workflow_json_download_and_upload_round_trip():
     app = make_app()
     with app.app_context():
         admin = User.query.filter_by(email="admin@example.org").first()
-        workflow = Workflow(owner_id=admin.id, name="Portable workflow", description="Round trip")
+        workflow = Workflow(owner_id=admin.id, name="Portable_workflow", description="Round trip")
         task = WorkflowTask(uid="checkpoint", label="Checkpoint", task_type="checkpoint")
         task.config = {"name": "ready"}
         workflow.tasks.append(task)
@@ -91,14 +91,14 @@ def test_workflow_json_download_and_upload_round_trip():
     downloaded = client.get(f"/workflows/{workflow_id}/download")
     assert downloaded.status_code == 200
     document = json.loads(downloaded.data)
-    assert document["name"] == "Portable workflow"
+    assert document["name"] == "Portable_workflow"
     assert set(document["tasks"]) == {"checkpoint"}
 
-    document["name"] = "Imported workflow"
+    document["name"] = "Imported_workflow"
     uploaded = client.post("/workflows/upload", data={"workflow_file": (io.BytesIO(json.dumps(document).encode()), "workflow.json")}, content_type="multipart/form-data")
     assert uploaded.status_code == 302
     with app.app_context():
-        imported = Workflow.query.filter_by(name="Imported workflow").one()
+        imported = Workflow.query.filter_by(name="Imported_workflow").one()
         imported_task = imported.as_json()["tasks"]["checkpoint"]
         assert imported_task["type"] == document["tasks"]["checkpoint"]["type"]
         assert imported_task["dagonweb"]["config"] == document["tasks"]["checkpoint"]["dagonweb"]["config"]
@@ -144,7 +144,9 @@ def test_workflow_list_exposes_crud_controls_for_owned_workflows():
     assert b"CRUD workflow" in response.data
     assert b"Open editor" in response.data
     assert b"Edit metadata" in response.data
+    assert b"Rename" in response.data
     assert b"Delete" in response.data
+    assert b"Delete all" in response.data
 
 
 def test_public_workflow_is_read_only_for_non_owner_on_list_page():
@@ -175,7 +177,8 @@ def test_public_workflow_is_read_only_for_non_owner_on_list_page():
     assert b"Shared workflow" in response.data
     assert b"Open editor" in response.data
     assert b"Edit metadata" not in response.data
-    assert b"Delete" not in response.data
+    assert b"Rename" not in response.data
+    assert b"delete_workflow" not in response.data
 
 
 def test_delete_workflow_removes_owned_workflow_and_runs():
@@ -237,6 +240,89 @@ def test_non_owner_cannot_delete_workflow():
         assert db.session.get(Workflow, workflow_id) is not None
 
 
+def test_rename_workflow_rejects_spaces_and_saves_valid_name():
+    app = make_app()
+    with app.app_context():
+        admin = User.query.filter_by(email="admin@example.org").one()
+        workflow = Workflow(owner_id=admin.id, name="Old_name")
+        task = WorkflowTask(uid="consumer", label="consumer", task_type="batch")
+        task.config = {"inputs": {"data": "workflow://Old_name/producer/output.txt", "external": "workflow://Other/producer/output.txt"}}
+        workflow.tasks.append(task)
+        db.session.add(workflow)
+        db.session.commit()
+        admin_id = str(admin.id)
+        workflow_id = workflow.id
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = admin_id
+        session["_fresh"] = True
+
+    invalid = client.post(f"/workflows/{workflow_id}/rename", data={"name": "New name"})
+    assert invalid.status_code == 302
+    with app.app_context():
+        assert db.session.get(Workflow, workflow_id).name == "Old_name"
+
+    valid = client.post(f"/workflows/{workflow_id}/rename", data={"name": "New_name"})
+    assert valid.status_code == 302
+    with app.app_context():
+        workflow = db.session.get(Workflow, workflow_id)
+        assert workflow.name == "New_name"
+        assert workflow.tasks[0].config["inputs"]["data"] == "workflow://New_name/producer/output.txt"
+        assert workflow.tasks[0].config["inputs"]["external"] == "workflow://Other/producer/output.txt"
+
+
+def test_delete_all_removes_only_manageable_workflows_for_user():
+    app = make_app()
+    with app.app_context():
+        owner = User(email="owner@example.org", name="Owner")
+        owner.set_password("password")
+        viewer = User(email="viewer@example.org", name="Viewer")
+        viewer.set_password("password")
+        user_role = Role.query.filter_by(name="user").one()
+        owner.roles.append(user_role)
+        viewer.roles.append(user_role)
+        db.session.add_all([owner, viewer])
+        db.session.flush()
+        own_workflow = Workflow(owner_id=viewer.id, name="Own_workflow")
+        shared_workflow = Workflow(owner_id=owner.id, name="Shared_workflow", is_public=True)
+        db.session.add_all([own_workflow, shared_workflow])
+        db.session.commit()
+        viewer_id = str(viewer.id)
+        own_workflow_id = own_workflow.id
+        shared_workflow_id = shared_workflow.id
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = viewer_id
+        session["_fresh"] = True
+
+    response = client.post("/workflows/delete-all")
+
+    assert response.status_code == 302
+    with app.app_context():
+        assert db.session.get(Workflow, own_workflow_id) is None
+        assert db.session.get(Workflow, shared_workflow_id) is not None
+
+
+def test_create_workflow_rejects_names_with_spaces():
+    app = make_app()
+    with app.app_context():
+        admin_id = str(User.query.filter_by(email="admin@example.org").one().id)
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = admin_id
+        session["_fresh"] = True
+
+    response = client.post("/workflows/new", data={"name": "Invalid name", "description": "", "is_public": "n"})
+
+    assert response.status_code == 200
+    assert b"Use only letters, numbers, underscores, and hyphens." in response.data
+    with app.app_context():
+        assert Workflow.query.filter_by(name="Invalid name").count() == 0
+
+
 def test_batch_template_creates_diamond_workflow_from_new_button():
     app = make_app()
     with app.app_context():
@@ -251,7 +337,7 @@ def test_batch_template_creates_diamond_workflow_from_new_button():
 
     assert response.status_code == 302
     with app.app_context():
-        workflow = Workflow.query.filter_by(name="New Batch diamond workflow").one()
+        workflow = Workflow.query.filter_by(name="New_batch_workflow").one()
         document = workflow.as_json()
         assert set(document["tasks"]) == {"extract", "transform_a", "transform_b", "merge"}
         assert {(link.source_uid, link.target_uid) for link in workflow.links} == {
@@ -450,11 +536,30 @@ def test_graph_validation_rejects_cycles_and_unknown_tasks():
         validate_graph_payload({"tasks": {"a": {"name": "a", "type": "batch", "command": "cat workflow:///b/b.txt"}, "b": {"name": "b", "type": "batch", "command": "cat workflow:///a/a.txt"}}})
     with pytest.raises(ValueError, match="missing task"):
         validate_graph_payload({"tasks": {"a": {"name": "a", "type": "batch", "command": "cat workflow:///missing/a.txt"}}})
+    with pytest.raises(ValueError, match="unsafe path"):
+        validate_graph_payload({"tasks": {"a": {"name": "a", "type": "batch", "command": "echo data > a.txt"}, "b": {"name": "b", "type": "batch", "command": "cat workflow:///a/bad$file.txt"}}})
+    with pytest.raises(ValueError, match="unsafe path"):
+        validate_graph_payload({"tasks": {"a": {"name": "a", "type": "batch", "command": "echo data > a.txt"}, "b": {"name": "b", "type": "batch", "command": "cat workflow:///a/../secret.txt"}}})
 
 
 def test_graph_validation_creates_links_from_workflow_references():
     _, links = validate_graph_payload({"tasks": {"source": {"name": "source", "type": "checkpoint"}, "target": {"name": "target", "type": "batch", "dagonweb": {"config": {"inputs": {"dataset": "workflow:///source/output"}}}}}})
     assert links == [{"source_name": "source", "source_output": "output", "target_name": "target", "target_input": "dataset"}]
+
+
+def test_graph_validation_treats_named_current_workflow_as_local_reference():
+    document = {
+        "name": "Current",
+        "tasks": {
+            "source": {"name": "source", "type": "checkpoint"},
+            "target": {"name": "target", "type": "batch", "dagonweb": {"config": {"inputs": {"dataset": "workflow://Current/source/output.txt"}}}},
+            "external": {"name": "external", "type": "batch", "dagonweb": {"config": {"inputs": {"dataset": "workflow://OtherWorkflow/source/output.txt"}}}},
+        },
+    }
+
+    _, links = validate_graph_payload(document)
+
+    assert links == [{"source_name": "source", "source_output": "output.txt", "target_name": "target", "target_input": "dataset"}]
 
 
 def test_graph_validation_ignores_workflow_examples_in_native_source():
