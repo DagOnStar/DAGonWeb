@@ -10,7 +10,6 @@ import venv
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-import networkx as nx
 from flask import current_app
 from ..dagon_ini import runtime_dagon_config
 from ..extensions import db
@@ -188,40 +187,6 @@ def execute_workflow(workflow: Workflow, user_id: int, run: WorkflowRun | None =
     db.session.commit()
     return run
 
-    try:
-        graph = nx.DiGraph()
-        task_by_uid = {task.name: task for task in workflow.tasks}
-        for task in workflow.tasks:
-            graph.add_node(task.name)
-        for link in workflow.links:
-            graph.add_edge(link.source_uid, link.target_uid)
-        if not nx.is_directed_acyclic_graph(graph):
-            raise RuntimeError("Workflow is not a DAG")
-        for uid in nx.topological_sort(graph):
-            task = task_by_uid[uid]
-            task_dir = safe_child(run_dir, uid)
-            task_dir.mkdir(parents=True, exist_ok=True)
-            task_run = TaskRun(workflow_run_id=run.id, task_uid=uid, status=RunStatus.RUNNING.value, scratch_path=str(task_dir), log="")
-            db.session.add(task_run)
-            db.session.commit()
-            try:
-                result = execute_task(task, task_dir, workflow)
-                task_run.status = RunStatus.SUCCESS.value
-                task_run.log = result
-            except Exception as exc:
-                task_run.status = RunStatus.FAILED.value
-                task_run.log = str(exc)
-                raise
-            finally:
-                db.session.commit()
-        run.status = RunStatus.SUCCESS.value
-        run.log += "Workflow completed successfully.\n"
-    except Exception as exc:
-        run.status = RunStatus.FAILED.value
-        run.log += f"Workflow failed: {exc}\n"
-    db.session.commit()
-    return run
-
 
 def execute_task(task: Any, task_dir: Path, workflow: Workflow) -> str:
     config = task.config
@@ -273,9 +238,14 @@ def list_directory(base: Path) -> list[dict[str, Any]]:
         return []
     if not base.is_dir():
         raise ValueError("Path is not a directory")
+    root = scratch_root()
     items = []
     for child in sorted(base.iterdir()):
-        items.append({"name": child.name, "is_dir": child.is_dir(), "size": child.stat().st_size, "modified_at": child.stat().st_mtime})
+        resolved = child.resolve()
+        if root not in resolved.parents and resolved != root:
+            continue
+        stat = child.stat()
+        items.append({"name": child.name, "is_dir": child.is_dir(), "size": stat.st_size, "modified_at": stat.st_mtime})
     return items
 
 
