@@ -18,6 +18,65 @@ from .forms import RunForm, WorkflowForm
 bp = Blueprint("workflows", __name__)
 WORKFLOW_REFERENCE = re.compile(r"workflow:///([A-Za-z0-9_-]{1,80})/([^\s]+)")
 
+
+def workflow_template_options() -> list[tuple[str, str]]:
+    return [("batch", "Batch diamond"), *[(task_type, label) for task_type, label in TASK_TYPE_LABELS.items() if task_type != "batch"]]
+
+
+def add_workflow_task(workflow: Workflow, name: str, task_type: str, x: int, y: int, config: dict) -> WorkflowTask:
+    task = WorkflowTask(workflow_id=workflow.id, uid=name, label=name, task_type=task_type, x=x, y=y)
+    task.config = config
+    workflow.tasks.append(task)
+    return task
+
+
+def apply_workflow_template(workflow: Workflow, template: str) -> None:
+    if template == "batch":
+        add_workflow_task(workflow, "extract", "batch", 120, 220, {"command": "echo hello > data.txt", "timeout": 3600, "inputs": {}})
+        add_workflow_task(workflow, "transform_a", "batch", 380, 120, {"command": "cat workflow:///extract/data.txt > a.txt", "timeout": 3600, "inputs": {"data": "workflow:///extract/data.txt"}})
+        add_workflow_task(workflow, "transform_b", "batch", 380, 320, {"command": "cat workflow:///extract/data.txt > b.txt", "timeout": 3600, "inputs": {"data": "workflow:///extract/data.txt"}})
+        add_workflow_task(
+            workflow,
+            "merge",
+            "batch",
+            640,
+            220,
+            {"command": "cat workflow:///transform_a/a.txt workflow:///transform_b/b.txt > result.txt", "timeout": 3600, "inputs": {"a": "workflow:///transform_a/a.txt", "b": "workflow:///transform_b/b.txt"}},
+        )
+    else:
+        defaults = {
+            "checkpoint": ("checkpoint", {"name": "checkpoint", "inputs": {}}),
+            "slurm": ("slurm_task", {"command": "echo hello from Slurm > output.txt", "partition": "", "time_limit": "01:00:00", "inputs": {}}),
+            "cloud": ("cloud_task", {"provider": "", "region": "", "command": "echo hello from cloud > output.txt", "inputs": {}}),
+            "docker": ("docker_task", {"image": "python:3.12-slim", "command": "python -c \"print('hello from Docker')\"", "inputs": {}}),
+            "native": ("native_task", {"callable": "workflow_functions:run", "source": "def run() -> dict:\n    return {'message': 'hello from native'}\n", "requirements": "", "inputs": {}, "outputs": {"output_file": "result.json"}, "executor": "local", "resources": {}, "python": "", "environment": {}}),
+            "llm": ("llm_task", {"provider": "openai-compatible", "prompt": {"messages": [{"role": "user", "content": "Summarize: {input}"}]}, "params": {}, "input_files": {}, "output_file": "response.json", "timeout": 120}),
+            "web": ("web_task", {"url": "https://example.com", "method": "GET", "query": {}, "headers": {}, "outputs": {"body": "response.txt"}, "inputs": {}}),
+        }
+        if template not in defaults:
+            raise ValueError("Unknown workflow template.")
+        name, config = defaults[template]
+        add_workflow_task(workflow, name, template, 160, 120, config)
+    db.session.flush()
+    task_names = {task.name for task in workflow.tasks}
+    links: set[tuple[str, str]] = set()
+    for task in workflow.tasks:
+        task_data = {"name": task.name, "task_type": task.normalized_task_type, "config": task.config}
+        for source_uid, source_output, target_input in task_workflow_references(task_data):
+            key = (source_uid, task.name)
+            if source_uid in task_names and key not in links:
+                links.add(key)
+                db.session.add(
+                    WorkflowLink(
+                        workflow_id=workflow.id,
+                        source_uid=source_uid,
+                        source_output=source_output,
+                        target_uid=task.name,
+                        target_input=target_input,
+                        workflow_uri=f"workflow:///{source_uid}/{source_output}",
+                    )
+                )
+
 def can_access(workflow: Workflow) -> bool:
     return workflow.owner_id == current_user.id or current_user.has_role("admin") or workflow.is_public
 
@@ -178,11 +237,29 @@ def list_workflows():
     query = Workflow.query
     if not current_user.has_role("admin"):
         query = query.filter((Workflow.owner_id == current_user.id) | (Workflow.is_public == True))
-    return render_template("workflows/list.html", workflows=query.order_by(Workflow.updated_at.desc()).all())
+    return render_template("workflows/list.html", workflows=query.order_by(Workflow.updated_at.desc()).all(), template_options=workflow_template_options())
 
 @bp.route("/new", methods=["GET", "POST"])
 @login_required
 def create_workflow():
+    template = request.args.get("template", "").strip()
+    if request.method == "GET" and template:
+        try:
+            template_labels = dict(workflow_template_options())
+            if template not in template_labels:
+                raise ValueError("Unknown workflow template.")
+            label = template_labels[template]
+            wf = Workflow(owner_id=current_user.id, name=f"New {label} workflow", description=f"Started from the {label} template.", is_public=False)
+            db.session.add(wf)
+            db.session.flush()
+            apply_workflow_template(wf, template)
+            db.session.commit()
+        except ValueError as exc:
+            db.session.rollback()
+            flash(str(exc), "danger")
+            return redirect(url_for("workflows.list_workflows"))
+        flash("Workflow created.", "success")
+        return redirect(url_for("workflows.editor", workflow_id=wf.id))
     form = WorkflowForm()
     if form.validate_on_submit():
         wf = Workflow(owner_id=current_user.id, name=form.name.data, description=form.description.data or "", is_public=form.is_public.data)

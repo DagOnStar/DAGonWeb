@@ -10,6 +10,10 @@ DAGonWeb is a Flask/Bootstrap Progressive Web Application for creating, editing,
 - Use SQLAlchemy models and migrations for persistent state.
 - Use role-based access: `admin` can manage users, roles, workflows, and settings; `user` can manage own workflows and runs.
 - Treat scratch directories as potentially sensitive. Never expose arbitrary filesystem paths outside the configured scratch root.
+- Keep all documentation updated.
+- Keep all examples updated.
+- Update the main README.md.
+- Enforce the automatic testing to validate modifications.
 
 ## Commands
 ```bash

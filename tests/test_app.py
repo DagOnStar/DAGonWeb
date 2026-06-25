@@ -104,6 +104,51 @@ def test_workflow_json_download_and_upload_round_trip():
         assert imported_task["dagonweb"]["config"] == document["tasks"]["checkpoint"]["dagonweb"]["config"]
 
 
+def test_workflow_list_exposes_new_workflow_template_options():
+    app = make_app()
+    with app.app_context():
+        admin_id = str(User.query.filter_by(email="admin@example.org").one().id)
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = admin_id
+        session["_fresh"] = True
+
+    response = client.get("/workflows/")
+
+    assert response.status_code == 200
+    assert b"Default empty workflow" in response.data
+    assert b"Batch diamond" in response.data
+    assert b"template=native" in response.data
+    assert b"template=web" in response.data
+
+
+def test_batch_template_creates_diamond_workflow_from_new_button():
+    app = make_app()
+    with app.app_context():
+        admin_id = str(User.query.filter_by(email="admin@example.org").one().id)
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = admin_id
+        session["_fresh"] = True
+
+    response = client.get("/workflows/new?template=batch")
+
+    assert response.status_code == 302
+    with app.app_context():
+        workflow = Workflow.query.filter_by(name="New Batch diamond workflow").one()
+        document = workflow.as_json()
+        assert set(document["tasks"]) == {"extract", "transform_a", "transform_b", "merge"}
+        assert {(link.source_uid, link.target_uid) for link in workflow.links} == {
+            ("extract", "transform_a"),
+            ("extract", "transform_b"),
+            ("transform_a", "merge"),
+            ("transform_b", "merge"),
+        }
+        assert document["tasks"]["extract"]["nexts"] == ["transform_a", "transform_b"]
+
+
 def test_web_task_serializes_native_dagonstar_specification():
     app = make_app()
     with app.app_context():
