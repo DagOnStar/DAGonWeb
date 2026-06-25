@@ -8,7 +8,7 @@ The supported import shape has a `name` and a `tasks` object keyed by task name.
 
 ## Editing a workflow
 
-Select a task type in the palette to add it. Task names must contain letters, numbers, underscores, or hyphens and must be unique. Use the Inspector to configure a task. Changes made through Apply, dragging tasks, connecting handles, or organizing the canvas save automatically.
+Select a task type in the palette to add it. Task names must contain letters, numbers, underscores, or hyphens and must be unique. Use the Inspector to configure a task. The Inspector can be resized, or expanded into the canvas area for larger forms and restored to the standard width. Changes made through Apply, dragging tasks, connecting handles, or organizing the canvas save automatically.
 
 To connect tasks, drag the right connector of a producer to the left connector of a consumer. DAGonWeb writes a `workflow:///producer/output` value into the consumer configuration and draws the link.
 

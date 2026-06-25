@@ -149,6 +149,28 @@ def test_batch_template_creates_diamond_workflow_from_new_button():
         assert document["tasks"]["extract"]["nexts"] == ["transform_a", "transform_b"]
 
 
+def test_editor_exposes_inspector_expand_control():
+    app = make_app()
+    with app.app_context():
+        admin = User.query.filter_by(email="admin@example.org").one()
+        workflow = Workflow(owner_id=admin.id, name="Expandable inspector")
+        db.session.add(workflow)
+        db.session.commit()
+        admin_id = str(admin.id)
+        workflow_id = workflow.id
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = admin_id
+        session["_fresh"] = True
+
+    response = client.get(f"/workflows/{workflow_id}/editor")
+
+    assert response.status_code == 200
+    assert b'id="toggleInspectorFull"' in response.data
+    assert b"Expand Inspector" in response.data
+
+
 def test_web_task_serializes_native_dagonstar_specification():
     app = make_app()
     with app.app_context():
