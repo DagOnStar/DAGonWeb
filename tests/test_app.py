@@ -10,7 +10,7 @@ import pytest
 from app.executor.local import dagonstar_document, execute_task, materialize_native_sources, prepare_native_task_environments, safe_child
 from app.dagon_ini import runtime_dagon_config
 from app.models import TASK_TYPE_LABELS, Role, Setting, TaskRun, TaskType, User, Workflow, WorkflowLink, WorkflowRun, WorkflowTask
-from app.workflows.routes import apply_import_layout, validate_graph_payload, workflow_python_source
+from app.workflows.routes import apply_import_layout, apply_workflow_template, validate_graph_payload, workflow_python_source
 
 
 def make_app():
@@ -147,6 +147,25 @@ def test_batch_template_creates_diamond_workflow_from_new_button():
             ("transform_b", "merge"),
         }
         assert document["tasks"]["extract"]["nexts"] == ["transform_a", "transform_b"]
+
+
+def test_native_template_callable_accepts_declared_output(tmp_path):
+    app = make_app()
+    with app.app_context():
+        admin = User.query.filter_by(email="admin@example.org").one()
+        workflow = Workflow(owner_id=admin.id, name="Native demo")
+        db.session.add(workflow)
+
+        apply_workflow_template(workflow, "native")
+        task = workflow.tasks[0]
+        namespace = {}
+        exec(task.config["source"], namespace)
+        output_path = tmp_path / task.config["outputs"]["output_file"]
+
+        result = namespace["run"](output_file=str(output_path))
+
+        assert result == {"message": "hello from native"}
+        assert json.loads(output_path.read_text(encoding="utf-8")) == result
 
 
 def test_editor_exposes_inspector_expand_control():

@@ -49,7 +49,7 @@ def apply_workflow_template(workflow: Workflow, template: str) -> None:
             "slurm": ("slurm_task", {"command": "echo hello from Slurm > output.txt", "partition": "", "time_limit": "01:00:00", "inputs": {}}),
             "cloud": ("cloud_task", {"provider": "", "region": "", "command": "echo hello from cloud > output.txt", "inputs": {}}),
             "docker": ("docker_task", {"image": "python:3.12-slim", "command": "python -c \"print('hello from Docker')\"", "inputs": {}}),
-            "native": ("native_task", {"callable": "workflow_functions:run", "source": "def run() -> dict:\n    return {'message': 'hello from native'}\n", "requirements": "", "inputs": {}, "outputs": {"output_file": "result.json"}, "executor": "local", "resources": {}, "python": "", "environment": {}}),
+            "native": ("native_task", {"callable": "workflow_functions:run", "source": "import json\nfrom pathlib import Path\n\n\ndef run(output_file: str) -> dict:\n    result = {'message': 'hello from native'}\n    path = Path(output_file)\n    path.parent.mkdir(parents=True, exist_ok=True)\n    path.write_text(json.dumps(result, indent=2), encoding='utf-8')\n    return result\n", "requirements": "", "inputs": {}, "outputs": {"output_file": "result.json"}, "executor": "local", "resources": {}, "python": "", "environment": {}}),
             "llm": ("llm_task", {"provider": "openai-compatible", "prompt": {"messages": [{"role": "user", "content": "Summarize: {input}"}]}, "params": {}, "input_files": {}, "output_file": "response.json", "timeout": 120}),
             "web": ("web_task", {"url": "https://example.com", "method": "GET", "query": {}, "headers": {}, "outputs": {"body": "response.txt"}, "inputs": {}}),
         }
