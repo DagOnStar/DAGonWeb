@@ -2,7 +2,9 @@
 
 ## Workflows
 
-Create a workflow from the Workflows page or import a DAGonStar JSON document. Download JSON to move a workflow between deployments, or choose **Generate Python** to download readable DAGonStar source with direct `DagonTask` declarations.
+Create a workflow from the Workflows page, start from one of the built-in templates, or import a DAGonStar JSON document. Each workflow card lets authorized users open the editor, edit metadata, run the workflow, export JSON, generate readable DAGonStar Python source, or delete the workflow and its run history.
+
+Public workflows can be opened and run by other signed-in users, but only the owner or an administrator can edit metadata or delete them. Administrators can manage every workflow.
 
 The supported import shape has a `name` and a `tasks` object keyed by task name. DAGonWeb retains editor coordinates and task configuration in a `dagonweb` extension. On import, `nexts` and `prevs` are ignored; links are inferred from `workflow:///` references.
 

@@ -211,7 +211,7 @@ class WorkflowRun(TimestampMixin, db.Model):
     label = db.Column(db.String(255), default="", nullable=False)
     scratch_path = db.Column(db.String(1024), nullable=False)
     log = db.Column(db.Text, default="")
-    workflow = db.relationship("Workflow", backref=db.backref("runs", lazy="dynamic"))
+    workflow = db.relationship("Workflow", backref=db.backref("runs", cascade="all, delete-orphan", lazy="dynamic"))
     user = db.relationship("User")
 
 class TaskRun(TimestampMixin, db.Model):

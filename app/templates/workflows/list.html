@@ -29,20 +29,31 @@
 
 <div class="row g-3">
   {% for wf in workflows %}
+    {% set editable = wf.owner_id == current_user.id or current_user.has_role('admin') %}
     <div class="col-md-4">
       <div class="card h-100">
         <div class="card-body">
           <h2 class="h5">{{ wf.name }}</h2>
           <p>{{ wf.description }}</p>
           <p class="text-muted">Owner: {{ wf.owner.name }}{% if wf.is_public %} · public{% endif %}</p>
-          <a class="btn btn-sm btn-primary" href="{{ url_for('workflows.editor', workflow_id=wf.id) }}">Open editor</a>
-          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.edit_workflow', workflow_id=wf.id) }}">Metadata</a>
-          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.download_workflow', workflow_id=wf.id) }}">Download JSON</a>
-          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.download_workflow_python', workflow_id=wf.id) }}">Generate Python</a>
-          <form class="d-inline" method="post" action="{{ url_for('workflows.run_workflow', workflow_id=wf.id) }}">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button class="btn btn-sm btn-success">Run</button>
-          </form>
+          <div class="d-flex flex-wrap gap-2">
+            <a class="btn btn-sm btn-primary" href="{{ url_for('workflows.editor', workflow_id=wf.id) }}">Open editor</a>
+            {% if editable %}
+              <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.edit_workflow', workflow_id=wf.id) }}">Edit metadata</a>
+            {% endif %}
+            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.download_workflow', workflow_id=wf.id) }}">Download JSON</a>
+            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.download_workflow_python', workflow_id=wf.id) }}">Generate Python</a>
+            <form class="d-inline" method="post" action="{{ url_for('workflows.run_workflow', workflow_id=wf.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-sm btn-success">Run</button>
+            </form>
+            {% if editable %}
+              <form class="d-inline" method="post" action="{{ url_for('workflows.delete_workflow', workflow_id=wf.id) }}" onsubmit="return confirm('Delete this workflow and its runs?');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
+            {% endif %}
+          </div>
         </div>
       </div>
     </div>

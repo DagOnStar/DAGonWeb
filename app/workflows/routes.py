@@ -267,7 +267,7 @@ def create_workflow():
         db.session.commit()
         flash("Workflow created.", "success")
         return redirect(url_for("workflows.editor", workflow_id=wf.id))
-    return render_template("workflows/form.html", form=form)
+    return render_template("workflows/form.html", form=form, title="New workflow")
 
 @bp.route("/<int:workflow_id>/edit-meta", methods=["GET", "POST"])
 @login_required
@@ -283,7 +283,7 @@ def edit_workflow(workflow_id):
         db.session.commit()
         flash("Workflow updated.", "success")
         return redirect(url_for("workflows.list_workflows"))
-    return render_template("workflows/form.html", form=form)
+    return render_template("workflows/form.html", form=form, title="Edit workflow")
 
 @bp.post("/<int:workflow_id>/delete")
 @login_required

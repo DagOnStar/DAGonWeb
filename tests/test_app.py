@@ -123,6 +123,120 @@ def test_workflow_list_exposes_new_workflow_template_options():
     assert b"template=web" in response.data
 
 
+def test_workflow_list_exposes_crud_controls_for_owned_workflows():
+    app = make_app()
+    with app.app_context():
+        admin = User.query.filter_by(email="admin@example.org").one()
+        workflow = Workflow(owner_id=admin.id, name="CRUD workflow", description="Manage me")
+        db.session.add(workflow)
+        db.session.commit()
+        admin_id = str(admin.id)
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = admin_id
+        session["_fresh"] = True
+
+    response = client.get("/workflows/")
+
+    assert response.status_code == 200
+    assert b"New workflow" in response.data
+    assert b"CRUD workflow" in response.data
+    assert b"Open editor" in response.data
+    assert b"Edit metadata" in response.data
+    assert b"Delete" in response.data
+
+
+def test_public_workflow_is_read_only_for_non_owner_on_list_page():
+    app = make_app()
+    with app.app_context():
+        owner = User(email="owner@example.org", name="Owner")
+        owner.set_password("password")
+        viewer = User(email="viewer@example.org", name="Viewer")
+        viewer.set_password("password")
+        user_role = Role.query.filter_by(name="user").one()
+        owner.roles.append(user_role)
+        viewer.roles.append(user_role)
+        db.session.add_all([owner, viewer])
+        db.session.flush()
+        workflow = Workflow(owner_id=owner.id, name="Shared workflow", is_public=True)
+        db.session.add(workflow)
+        db.session.commit()
+        viewer_id = str(viewer.id)
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = viewer_id
+        session["_fresh"] = True
+
+    response = client.get("/workflows/")
+
+    assert response.status_code == 200
+    assert b"Shared workflow" in response.data
+    assert b"Open editor" in response.data
+    assert b"Edit metadata" not in response.data
+    assert b"Delete" not in response.data
+
+
+def test_delete_workflow_removes_owned_workflow_and_runs():
+    app = make_app()
+    with app.app_context():
+        admin = User.query.filter_by(email="admin@example.org").one()
+        workflow = Workflow(owner_id=admin.id, name="Delete me")
+        db.session.add(workflow)
+        db.session.flush()
+        run = WorkflowRun(workflow_id=workflow.id, user_id=admin.id, status="success", scratch_path="", log="")
+        db.session.add(run)
+        db.session.flush()
+        db.session.add(TaskRun(workflow_run_id=run.id, task_uid="task", status="success", scratch_path="", log=""))
+        db.session.commit()
+        admin_id = str(admin.id)
+        workflow_id = workflow.id
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = admin_id
+        session["_fresh"] = True
+
+    response = client.post(f"/workflows/{workflow_id}/delete")
+
+    assert response.status_code == 302
+    with app.app_context():
+        assert db.session.get(Workflow, workflow_id) is None
+        assert WorkflowRun.query.filter_by(workflow_id=workflow_id).count() == 0
+        assert TaskRun.query.count() == 0
+
+
+def test_non_owner_cannot_delete_workflow():
+    app = make_app()
+    with app.app_context():
+        owner = User(email="owner@example.org", name="Owner")
+        owner.set_password("password")
+        viewer = User(email="viewer@example.org", name="Viewer")
+        viewer.set_password("password")
+        user_role = Role.query.filter_by(name="user").one()
+        owner.roles.append(user_role)
+        viewer.roles.append(user_role)
+        db.session.add_all([owner, viewer])
+        db.session.flush()
+        workflow = Workflow(owner_id=owner.id, name="Protected workflow", is_public=True)
+        db.session.add(workflow)
+        db.session.commit()
+        viewer_id = str(viewer.id)
+        workflow_id = workflow.id
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = viewer_id
+        session["_fresh"] = True
+
+    response = client.post(f"/workflows/{workflow_id}/delete")
+
+    assert response.status_code == 403
+    with app.app_context():
+        assert db.session.get(Workflow, workflow_id) is not None
+
+
 def test_batch_template_creates_diamond_workflow_from_new_button():
     app = make_app()
     with app.app_context():

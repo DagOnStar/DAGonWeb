@@ -1,1 +1,30 @@
-{% extends 'base.html' %}{% block content %}<h1>Workflow</h1><form method="post" class="col-md-7">{{ form.hidden_tag() }}<div class="mb-3">{{ form.name.label(class='form-label') }}{{ form.name(class='form-control') }}</div><div class="mb-3">{{ form.description.label(class='form-label') }}{{ form.description(class='form-control', rows=5) }}</div><div class="form-check mb-3">{{ form.is_public(class='form-check-input') }}{{ form.is_public.label(class='form-check-label') }}</div>{{ form.submit(class='btn btn-primary') }}</form>{% endblock %}
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+    <h1 class="h3">{{ title or 'Workflow' }}</h1>
+    <form method="post" class="card card-body">
+      {{ form.hidden_tag() }}
+      <div class="mb-3">
+        {{ form.name.label(class='form-label') }}
+        {{ form.name(class='form-control') }}
+        {% for error in form.name.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+      </div>
+      <div class="mb-3">
+        {{ form.description.label(class='form-label') }}
+        {{ form.description(class='form-control', rows=5) }}
+        {% for error in form.description.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+      </div>
+      <div class="form-check mb-3">
+        {{ form.is_public(class='form-check-input') }}
+        {{ form.is_public.label(class='form-check-label') }}
+      </div>
+      <div class="d-flex gap-2">
+        {{ form.submit(class='btn btn-primary') }}
+        <a class="btn btn-outline-secondary" href="{{ url_for('workflows.list_workflows') }}">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
