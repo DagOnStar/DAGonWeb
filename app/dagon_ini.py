@@ -6,15 +6,58 @@ from typing import Any
 
 
 DEFAULT_DAGON_INI = """[dagon_service]
-route = http://localhost:57009
+route = http://localhost:57000
 use = False
 
 [ftp_pub]
 ip = localhost
 
+[dagon_ip]
+ip = localhost
+
 [batch]
+scratch_dir_base = /tmp/
+run_base =
 threads = 1
 remove_dir = False
+
+[slurm]
+partition =
+
+[ec2]
+key =
+secret =
+region =
+
+[digitalocean]
+key =
+
+[gce]
+key =
+secret =
+project =
+
+[loggers]
+keys = root
+
+[handlers]
+keys = stream_handler
+
+[formatters]
+keys = formatter
+
+[logger_root]
+level = DEBUG
+handlers = stream_handler
+
+[handler_stream_handler]
+class = StreamHandler
+level = DEBUG
+formatter = formatter
+args = (sys.stderr,)
+
+[formatter_formatter]
+format = %(asctime)s %(name)-12s %(levelname)-8s %(message)s
 """
 
 

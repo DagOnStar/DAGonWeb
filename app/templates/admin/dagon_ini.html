@@ -10,45 +10,129 @@
 </div>
 
 <div class="row g-3">
-  <div class="col-xl-8">
+  <div class="col-12">
     <form method="post" id="dagonIniForm" class="dagon-ini-panel">
       {{ form.hidden_tag() }}
-      <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 border rounded-top bg-body-tertiary px-3 py-2">
+      <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 border rounded-top bg-body-tertiary px-3 py-2 dagon-ini-toolbar">
         <div>
           {{ form.content.label(class='form-label mb-0 fw-semibold') }}
-          <div id="dagon-ini-help" class="form-text mb-0">INI syntax is checked before saving.</div>
+          <div id="dagon-ini-help" class="form-text mb-0">Use the guided setup or raw INI. Both views save the same DAGonStar file.</div>
         </div>
         <div class="d-flex align-items-center gap-2">
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="dagonIniFormat">Format</button>
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="dagonIniAddLlm">Add LLM</button>
           <span class="badge text-bg-light border"><span id="dagonIniLines">0</span> lines</span>
           <span class="badge text-bg-light border"><span id="dagonIniChars">0</span> chars</span>
           {{ form.submit(class='btn btn-primary btn-sm') }}
         </div>
       </div>
-      {{ form.content(class='form-control font-monospace dagon-ini-editor rounded-0 rounded-bottom', rows='26', spellcheck='false', autocomplete='off', autocapitalize='off', aria_describedby='dagon-ini-help dagon-ini-warning') }}
+      <div class="border-start border-end p-3 dagon-ini-console">
+        <div class="dagon-ini-status border rounded p-3 mb-3" id="dagonIniStatus" role="status" aria-live="polite"></div>
+        <div class="row g-3">
+          <div class="col-xl-4">
+            <div class="dagon-ini-section">
+              <h2 class="h6">Runtime</h2>
+              <div class="mb-3">
+                <label class="form-label" for="cfg_dagon_service_route">DAGon service route</label>
+                <input class="form-control" id="cfg_dagon_service_route" data-section="dagon_service" data-key="route" placeholder="http://localhost:57000">
+              </div>
+              <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" id="cfg_dagon_service_use" data-section="dagon_service" data-key="use" data-kind="bool">
+                <label class="form-check-label" for="cfg_dagon_service_use">Use DAGon service</label>
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="cfg_ftp_pub_ip">FTP public host</label>
+                <input class="form-control" id="cfg_ftp_pub_ip" data-section="ftp_pub" data-key="ip" placeholder="localhost">
+              </div>
+              <div>
+                <label class="form-label" for="cfg_dagon_ip_ip">DAGon node IP</label>
+                <input class="form-control" id="cfg_dagon_ip_ip" data-section="dagon_ip" data-key="ip" placeholder="localhost">
+              </div>
+            </div>
+          </div>
+          <div class="col-xl-4">
+            <div class="dagon-ini-section">
+              <h2 class="h6">Local Batch</h2>
+              <div class="mb-3">
+                <label class="form-label" for="cfg_batch_threads">Staging threads</label>
+                <input class="form-control" id="cfg_batch_threads" data-section="batch" data-key="threads" type="number" min="1" max="256" placeholder="1">
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="cfg_batch_run_base">Run folder pattern</label>
+                <input class="form-control" id="cfg_batch_run_base" data-section="batch" data-key="run_base" placeholder="%Y%m%d-%H%M%S-__MILLIS__">
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="cfg_batch_scratch_dir_base">Scratch base preview</label>
+                <input class="form-control" id="cfg_batch_scratch_dir_base" data-section="batch" data-key="scratch_dir_base" placeholder="/tmp/" aria-describedby="batchScratchHelp">
+                <div class="form-text" id="batchScratchHelp">DAGonWeb overrides this at runtime with the configured scratch root.</div>
+              </div>
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="cfg_batch_remove_dir" data-section="batch" data-key="remove_dir" data-kind="bool">
+                <label class="form-check-label" for="cfg_batch_remove_dir">Remove task folders after use</label>
+              </div>
+            </div>
+          </div>
+          <div class="col-xl-4">
+            <div class="dagon-ini-section">
+              <h2 class="h6">Schedulers And Cloud</h2>
+              <div class="mb-3">
+                <label class="form-label" for="cfg_slurm_partition">Default Slurm partition</label>
+                <input class="form-control" id="cfg_slurm_partition" data-section="slurm" data-key="partition">
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="cfg_ec2_region">EC2 region</label>
+                <input class="form-control" id="cfg_ec2_region" data-section="ec2" data-key="region">
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="cfg_digitalocean_key">DigitalOcean key</label>
+                <input class="form-control" id="cfg_digitalocean_key" data-section="digitalocean" data-key="key" autocomplete="off">
+              </div>
+              <div>
+                <label class="form-label" for="cfg_gce_project">GCE project</label>
+                <input class="form-control" id="cfg_gce_project" data-section="gce" data-key="project">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row g-3 mt-1">
+          <div class="col-lg-7">
+            <div class="dagon-ini-section">
+              <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
+                <h2 class="h6 mb-0">OpenAI-Compatible LLM Providers</h2>
+                <button type="button" class="btn btn-outline-primary btn-sm" id="dagonIniAddLlmInline">Add provider</button>
+              </div>
+              <div id="llmProviders" class="row g-2"></div>
+            </div>
+          </div>
+          <div class="col-lg-5">
+            <div class="dagon-ini-section">
+              <h2 class="h6">Logging</h2>
+              <div class="mb-3">
+                <label class="form-label" for="cfg_logger_root_level">Root level</label>
+                <select class="form-select" id="cfg_logger_root_level" data-section="logger_root" data-key="level">
+                  <option>DEBUG</option>
+                  <option>INFO</option>
+                  <option>WARNING</option>
+                  <option>ERROR</option>
+                  <option>CRITICAL</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label" for="cfg_formatter_formatter_format">Log format</label>
+                <input class="form-control" id="cfg_formatter_formatter_format" data-section="formatter_formatter" data-key="format">
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      {{ form.content(class='form-control font-monospace dagon-ini-editor rounded-0 rounded-bottom', rows='18', spellcheck='false', autocomplete='off', autocapitalize='off', aria_describedby='dagon-ini-help dagon-ini-warning') }}
       {% for error in form.content.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
       <div class="d-flex flex-wrap justify-content-between gap-2 mt-2">
         <div class="text-muted small">Stored at <code>{{ path }}</code></div>
         <div class="text-muted small">Press <kbd>Tab</kbd> to indent selected lines.</div>
       </div>
     </form>
-  </div>
-  <div class="col-xl-4">
-    <div class="border rounded p-3 mb-3">
-      <h2 class="h5">Safety notes</h2>
-      <p id="dagon-ini-warning" class="mb-2">DAGonWeb still controls <code>[batch] scratch_dir_base</code> and <code>remove_dir</code> at runtime so scratch browsing stays inside the configured root.</p>
-      <p class="mb-0">For workflow-specific values, prefer a workflow card's <strong>Setup</strong> action. Use this editor for global defaults and uncommon DAGonStar sections.</p>
-    </div>
-    <div class="border rounded p-3">
-      <h2 class="h5">Common sections</h2>
-      <dl class="mb-0">
-        <dt><code>[dagon_service]</code></dt>
-        <dd class="text-muted">Remote DAGon service route and enable flag.</dd>
-        <dt><code>[ftp_pub]</code></dt>
-        <dd class="text-muted">Public host used by DAGonStar file publication.</dd>
-        <dt><code>[batch]</code></dt>
-        <dd class="text-muted mb-0">Batch executor defaults such as worker threads.</dd>
-      </dl>
-    </div>
   </div>
 </div>
 {% endblock %}
@@ -59,7 +143,104 @@
   const editor = document.querySelector('.dagon-ini-editor');
   const lineCounter = document.getElementById('dagonIniLines');
   const charCounter = document.getElementById('dagonIniChars');
+  const status = document.getElementById('dagonIniStatus');
+  const llmProviders = document.getElementById('llmProviders');
   if (!editor || !lineCounter || !charCounter) return;
+  const order = ['dagon_service', 'ftp_pub', 'dagon_ip', 'batch', 'slurm', 'ec2', 'digitalocean', 'gce', 'loggers', 'handlers', 'formatters', 'logger_root', 'handler_stream_handler', 'formatter_formatter'];
+  let config = {};
+  let syncing = false;
+
+  function parseIni(text) {
+    const parsed = {};
+    let section = null;
+    text.split(/\r?\n/).forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith(';') || trimmed.startsWith('#')) return;
+      const match = trimmed.match(/^\[([^\]]+)\]$/);
+      if (match) {
+        section = match[1];
+        parsed[section] = parsed[section] || {};
+        return;
+      }
+      const eq = line.indexOf('=');
+      if (!section || eq < 0) return;
+      parsed[section][line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+    });
+    return parsed;
+  }
+
+  function dumpIni(data) {
+    const sections = [...order, ...Object.keys(data).filter((name) => !order.includes(name)).sort()];
+    return sections.filter((name) => data[name] && Object.keys(data[name]).length).map((name) => {
+      const keys = Object.keys(data[name]);
+      return `[${name}]\n${keys.map((key) => `${key} = ${data[name][key] ?? ''}`).join('\n')}`;
+    }).join('\n\n') + '\n';
+  }
+
+  function setValue(section, key, value) {
+    config[section] = config[section] || {};
+    config[section][key] = value;
+  }
+
+  function syncEditor() {
+    syncing = true;
+    editor.value = dumpIni(config);
+    updateCounts();
+    syncing = false;
+  }
+
+  function syncControls() {
+    document.querySelectorAll('[data-section][data-key]').forEach((field) => {
+      const value = (config[field.dataset.section] || {})[field.dataset.key] || '';
+      if (field.dataset.kind === 'bool') {
+        field.checked = ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
+      } else {
+        field.value = value;
+      }
+    });
+  }
+
+  function syncStatus() {
+    const serviceOn = ['1', 'true', 'yes', 'on'].includes(String((config.dagon_service || {}).use || '').toLowerCase());
+    const llmCount = Object.keys(config).filter((name) => name.startsWith('llm.')).length;
+    status.innerHTML = `<div class="row g-2">
+      <div class="col-md"><strong>Service</strong><br><span class="text-muted">${serviceOn ? 'remote registration enabled' : 'local in-process execution'}</span></div>
+      <div class="col-md"><strong>Scratch</strong><br><span class="text-muted">DAGonWeb overrides unsafe paths at runtime</span></div>
+      <div class="col-md"><strong>Providers</strong><br><span class="text-muted">${llmCount} LLM section${llmCount === 1 ? '' : 's'} configured</span></div>
+    </div>`;
+  }
+
+  function renderLlmProviders() {
+    const sections = Object.keys(config).filter((name) => name.startsWith('llm.')).sort();
+    llmProviders.innerHTML = sections.length ? sections.map((section) => {
+      const name = section.slice(4);
+      const item = config[section] || {};
+      return `<div class="col-md-6">
+        <div class="border rounded p-3 h-100">
+          <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
+            <strong><code>[${section}]</code></strong>
+            <button type="button" class="btn btn-outline-danger btn-sm" data-remove-llm="${section}">Remove</button>
+          </div>
+          <label class="form-label" for="llm_${name}_endpoint">Endpoint</label>
+          <input class="form-control mb-2" id="llm_${name}_endpoint" data-section="${section}" data-key="endpoint" value="${escapeAttr(item.endpoint || '')}">
+          <label class="form-label" for="llm_${name}_api_key_env">API key environment variable</label>
+          <input class="form-control mb-2" id="llm_${name}_api_key_env" data-section="${section}" data-key="api_key_env" value="${escapeAttr(item.api_key_env || '')}">
+          <label class="form-label" for="llm_${name}_model">Default model</label>
+          <input class="form-control" id="llm_${name}_model" data-section="${section}" data-key="model" value="${escapeAttr(item.model || '')}">
+        </div>
+      </div>`;
+    }).join('') : '<div class="col-12"><div class="text-muted small border rounded p-3">No LLM providers yet. Add one for DAGonStar LLM tasks.</div></div>';
+  }
+
+  function escapeAttr(value) {
+    return String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
+  }
+
+  function refreshFromConfig() {
+    syncControls();
+    renderLlmProviders();
+    syncStatus();
+  }
 
   function updateCounts() {
     const value = editor.value || '';
@@ -85,6 +266,47 @@
   });
 
   editor.addEventListener('input', updateCounts);
+  editor.addEventListener('input', () => {
+    if (syncing) return;
+    config = parseIni(editor.value);
+    refreshFromConfig();
+  });
+
+  document.getElementById('dagonIniFormat').addEventListener('click', () => {
+    config = parseIni(editor.value);
+    refreshFromConfig();
+    syncEditor();
+  });
+
+  function addLlmProvider() {
+    const raw = prompt('Provider name for [llm.<name>]', 'default');
+    const name = (raw || '').trim().replace(/[^A-Za-z0-9_.-]/g, '-');
+    if (!name) return;
+    const section = `llm.${name}`;
+    config[section] = config[section] || {endpoint: '', api_key_env: `DAGON_LLM_${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY`, model: ''};
+    refreshFromConfig();
+    syncEditor();
+  }
+
+  document.getElementById('dagonIniAddLlm').addEventListener('click', addLlmProvider);
+  document.getElementById('dagonIniAddLlmInline').addEventListener('click', addLlmProvider);
+  document.addEventListener('input', (event) => {
+    const field = event.target.closest('[data-section][data-key]');
+    if (!field || field === editor) return;
+    setValue(field.dataset.section, field.dataset.key, field.dataset.kind === 'bool' ? (field.checked ? 'True' : 'False') : field.value);
+    syncStatus();
+    syncEditor();
+  });
+  document.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-remove-llm]');
+    if (!button) return;
+    delete config[button.dataset.removeLlm];
+    refreshFromConfig();
+    syncEditor();
+  });
+
+  config = parseIni(editor.value);
+  refreshFromConfig();
   updateCounts();
 })();
 </script>

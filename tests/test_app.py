@@ -164,8 +164,8 @@ def test_dagon_ini_editor_exposes_advanced_editing_guidance():
     assert response.status_code == 200
     assert b"Edit global dagon.ini" in response.data
     assert b"dagonIniLines" in response.data
-    assert b"Safety notes" in response.data
-    assert b"workflow-specific values" in response.data
+    assert b"OpenAI-Compatible LLM Providers" in response.data
+    assert b"DAGonWeb overrides this at runtime" in response.data
 
 
 def test_workflow_link_uri_contract():
