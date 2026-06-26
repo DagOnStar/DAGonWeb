@@ -1,0 +1,14 @@
+{% extends 'base.html' %}{% block title %}Complete Registration - DAGonWeb{% endblock %}{% block content %}
+<div class="row justify-content-center"><div class="col-md-5"><div class="card"><div class="card-body">
+<h1 class="h4">Complete registration</h1>
+<form method="post">
+  {{ form.hidden_tag() }}
+  <div class="mb-3">
+    <label class="form-label">Email</label>
+    <input class="form-control" value="{{ email }}" disabled>
+  </div>
+  <div class="mb-3">{{ form.password.label(class='form-label') }}{{ form.password(class='form-control') }}{% for error in form.password.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div>
+  <div class="mb-3">{{ form.confirm.label(class='form-label') }}{{ form.confirm(class='form-control') }}{% for error in form.confirm.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div>
+  {{ form.submit(class='btn btn-primary') }}
+</form>
+</div></div></div></div>{% endblock %}

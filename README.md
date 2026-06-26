@@ -12,7 +12,7 @@ DAGonStar is a lightweight Python workflow engine for directed acyclic graphs th
 
 - Flask 3, SQLAlchemy, Flask-Login, Flask-WTF, Bootstrap 5.
 - PWA manifest and service worker.
-- User registration and authentication.
+- User registration with email verification and authentication.
 - Role-based authorization with `admin` and `user` roles.
 - CRUD for users, roles, workflow metadata, and workflow graphs, including workflow rename and bulk delete controls.
 - Visual editor with draggable nodes, curved connectors, auto-layout, and a resizable/expandable inspector.
@@ -20,7 +20,8 @@ DAGonStar is a lightweight Python workflow engine for directed acyclic graphs th
 - Native task output mappings are passed to the Python callable as keyword arguments, so demo callables write their declared output files directly.
 - DAGonStar JSON import/export and direct Python workflow generation.
 - Asynchronous server-side runs with live task status and scratch artifact browsing/downloads.
-- Admin setup panel for scratch directory path.
+- Admin setup panel for scratch directory path and SMTP email verification.
+- Per-workflow DAGonStar setup for common `dagon.ini` values, with raw INI editing kept as an advanced option.
 - Docker Compose deployment with an external mounted scratch directory.
 - SQLite default, with PostgreSQL and MySQL examples.
 - Apache-2.0 license.

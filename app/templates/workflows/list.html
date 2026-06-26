@@ -46,6 +46,7 @@
             <a class="btn btn-sm btn-primary" href="{{ url_for('workflows.editor', workflow_id=wf.id) }}">Open editor</a>
             {% if editable %}
               <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.edit_workflow', workflow_id=wf.id) }}">Edit metadata</a>
+              <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.workflow_setup', workflow_id=wf.id) }}">Setup</a>
               <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#renameWorkflow{{ wf.id }}" aria-expanded="false" aria-controls="renameWorkflow{{ wf.id }}">Rename</button>
             {% endif %}
             <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.download_workflow', workflow_id=wf.id) }}">Download JSON</a>

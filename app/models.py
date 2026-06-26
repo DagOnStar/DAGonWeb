@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import secrets
+import hashlib
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
@@ -76,6 +78,25 @@ class User(UserMixin, TimestampMixin, db.Model):
     def is_active(self) -> bool:  # type: ignore[override]
         return self.active
 
+
+class RegistrationToken(TimestampMixin, db.Model):
+    __tablename__ = "registration_tokens"
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(255), nullable=False, index=True)
+    token_hash = db.Column(db.String(64), unique=True, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    used_at = db.Column(db.DateTime)
+
+    @staticmethod
+    def hash_token(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def issue(cls, email: str, expires_at: datetime) -> tuple["RegistrationToken", str]:
+        token = secrets.token_urlsafe(32)
+        record = cls(email=email.lower(), token_hash=cls.hash_token(token), expires_at=expires_at)
+        return record, token
+
 class Setting(TimestampMixin, db.Model):
     __tablename__ = "settings"
     id = db.Column(db.Integer, primary_key=True)
@@ -89,9 +110,18 @@ class Workflow(TimestampMixin, db.Model):
     name = db.Column(db.String(255), nullable=False)
     description = db.Column(db.Text, default="")
     is_public = db.Column(db.Boolean, default=False, nullable=False)
+    dagon_ini_json = db.Column(db.Text, default="{}")
     owner = db.relationship("User", backref=db.backref("workflows", lazy="dynamic"))
     tasks = db.relationship("WorkflowTask", cascade="all, delete-orphan", backref="workflow", lazy="joined")
     links = db.relationship("WorkflowLink", cascade="all, delete-orphan", backref="workflow", lazy="joined")
+
+    @property
+    def dagon_ini(self) -> dict[str, Any]:
+        return json.loads(self.dagon_ini_json or "{}")
+
+    @dagon_ini.setter
+    def dagon_ini(self, value: dict[str, Any]) -> None:
+        self.dagon_ini_json = json.dumps(value, indent=2, sort_keys=True)
 
     def as_json(self) -> dict[str, Any]:
         tasks: dict[str, dict[str, Any]] = {}

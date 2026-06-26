@@ -1,21 +1,91 @@
 {% extends 'base.html' %}
 {% block title %}Edit dagon.ini · DAGonWeb{% endblock %}
 {% block content %}
-<div class="row">
-  <div class="col-lg-9 col-xl-8">
-    <h1>Edit dagon.ini</h1>
-    <p class="text-muted">This configuration is used by future DAGonStar workflow runs. The batch scratch directory remains managed by DAGonWeb for file-safety.</p>
-    <form method="post">
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h1 class="h3 mb-1">Edit global dagon.ini</h1>
+    <p class="text-muted mb-0">Advanced defaults for future DAGonStar workflow runs.</p>
+  </div>
+  <a class="btn btn-outline-secondary" href="{{ url_for('admin.settings') }}">Back to setup</a>
+</div>
+
+<div class="row g-3">
+  <div class="col-xl-8">
+    <form method="post" id="dagonIniForm" class="dagon-ini-panel">
       {{ form.hidden_tag() }}
-      <div class="mb-3">
-        {{ form.content.label(class='form-label visually-hidden') }}
-        {{ form.content(class='form-control font-monospace', rows='24', spellcheck='false', aria_describedby='dagon-ini-help') }}
-        {% for error in form.content.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
-        <div id="dagon-ini-help" class="form-text">INI syntax is checked before saving. Stored at <code>{{ path }}</code>.</div>
+      <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 border rounded-top bg-body-tertiary px-3 py-2">
+        <div>
+          {{ form.content.label(class='form-label mb-0 fw-semibold') }}
+          <div id="dagon-ini-help" class="form-text mb-0">INI syntax is checked before saving.</div>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+          <span class="badge text-bg-light border"><span id="dagonIniLines">0</span> lines</span>
+          <span class="badge text-bg-light border"><span id="dagonIniChars">0</span> chars</span>
+          {{ form.submit(class='btn btn-primary btn-sm') }}
+        </div>
       </div>
-      {{ form.submit(class='btn btn-primary') }}
-      <a class="btn btn-outline-secondary" href="{{ url_for('admin.settings') }}">Back to setup</a>
+      {{ form.content(class='form-control font-monospace dagon-ini-editor rounded-0 rounded-bottom', rows='26', spellcheck='false', autocomplete='off', autocapitalize='off', aria_describedby='dagon-ini-help dagon-ini-warning') }}
+      {% for error in form.content.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+      <div class="d-flex flex-wrap justify-content-between gap-2 mt-2">
+        <div class="text-muted small">Stored at <code>{{ path }}</code></div>
+        <div class="text-muted small">Press <kbd>Tab</kbd> to indent selected lines.</div>
+      </div>
     </form>
   </div>
+  <div class="col-xl-4">
+    <div class="border rounded p-3 mb-3">
+      <h2 class="h5">Safety notes</h2>
+      <p id="dagon-ini-warning" class="mb-2">DAGonWeb still controls <code>[batch] scratch_dir_base</code> and <code>remove_dir</code> at runtime so scratch browsing stays inside the configured root.</p>
+      <p class="mb-0">For workflow-specific values, prefer a workflow card's <strong>Setup</strong> action. Use this editor for global defaults and uncommon DAGonStar sections.</p>
+    </div>
+    <div class="border rounded p-3">
+      <h2 class="h5">Common sections</h2>
+      <dl class="mb-0">
+        <dt><code>[dagon_service]</code></dt>
+        <dd class="text-muted">Remote DAGon service route and enable flag.</dd>
+        <dt><code>[ftp_pub]</code></dt>
+        <dd class="text-muted">Public host used by DAGonStar file publication.</dd>
+        <dt><code>[batch]</code></dt>
+        <dd class="text-muted mb-0">Batch executor defaults such as worker threads.</dd>
+      </dl>
+    </div>
+  </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  const editor = document.querySelector('.dagon-ini-editor');
+  const lineCounter = document.getElementById('dagonIniLines');
+  const charCounter = document.getElementById('dagonIniChars');
+  if (!editor || !lineCounter || !charCounter) return;
+
+  function updateCounts() {
+    const value = editor.value || '';
+    lineCounter.textContent = value ? String(value.split('\n').length) : '0';
+    charCounter.textContent = String(value.length);
+  }
+
+  editor.addEventListener('keydown', (event) => {
+    if (event.key !== 'Tab') return;
+    event.preventDefault();
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    const value = editor.value;
+    const selected = value.slice(start, end);
+    if (start !== end && selected.includes('\n')) {
+      const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+      const replacement = value.slice(lineStart, end).split('\n').map((line) => `  ${line}`).join('\n');
+      editor.setRangeText(replacement, lineStart, end, 'select');
+    } else {
+      editor.setRangeText('  ', start, end, 'end');
+    }
+    updateCounts();
+  });
+
+  editor.addEventListener('input', updateCounts);
+  updateCounts();
+})();
+</script>
 {% endblock %}

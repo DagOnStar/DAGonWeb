@@ -28,15 +28,41 @@ def dashboard():
 @bp.route("/settings", methods=["GET", "POST"])
 @admin_required
 def settings():
-    setting = Setting.query.filter_by(key="scratch_dir").first() or Setting(key="scratch_dir", value="/scratch/dagonweb")
-    form = SettingsForm(scratch_dir=setting.value)
+    values = {
+        "scratch_dir": setting_value("scratch_dir", current_app.config["SCRATCH_DIR"]),
+        "smtp_host": setting_value("smtp_host", ""),
+        "smtp_port": int(setting_value("smtp_port", "587")),
+        "smtp_from": setting_value("smtp_from", "noreply@localhost"),
+        "smtp_user": setting_value("smtp_user", ""),
+        "smtp_password": setting_value("smtp_password", ""),
+        "smtp_tls": setting_value("smtp_tls", "true") == "true",
+    }
+    form = SettingsForm(**values)
     if form.validate_on_submit():
-        setting.value = form.scratch_dir.data
-        db.session.add(setting)
+        set_setting("scratch_dir", form.scratch_dir.data)
+        set_setting("smtp_host", form.smtp_host.data or "")
+        set_setting("smtp_port", str(form.smtp_port.data or 587))
+        set_setting("smtp_from", form.smtp_from.data or "noreply@localhost")
+        set_setting("smtp_user", form.smtp_user.data or "")
+        set_setting("smtp_password", form.smtp_password.data or "")
+        set_setting("smtp_tls", "true" if form.smtp_tls.data else "false")
         db.session.commit()
         flash("Settings saved.", "success")
         return redirect(url_for("admin.settings"))
     return render_template("admin/settings.html", form=form)
+
+
+def setting_value(key: str, default: str) -> str:
+    setting = Setting.query.filter_by(key=key).first()
+    return setting.value if setting else default
+
+
+def set_setting(key: str, value: str) -> None:
+    setting = Setting.query.filter_by(key=key).first()
+    if setting:
+        setting.value = value
+    else:
+        db.session.add(Setting(key=key, value=value))
 
 
 def dagon_ini_path() -> Path:

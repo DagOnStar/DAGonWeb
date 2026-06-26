@@ -1,6 +1,6 @@
 from flask_wtf import FlaskForm
-from wtforms import BooleanField, PasswordField, SelectMultipleField, StringField, SubmitField, TextAreaField
-from wtforms.validators import DataRequired, Email, Length, Optional
+from wtforms import BooleanField, IntegerField, PasswordField, SelectMultipleField, StringField, SubmitField, TextAreaField
+from wtforms.validators import DataRequired, Email, Length, NumberRange, Optional
 
 class RoleForm(FlaskForm):
     name = StringField("Name", validators=[DataRequired(), Length(max=80)])
@@ -17,6 +17,12 @@ class UserForm(FlaskForm):
 
 class SettingsForm(FlaskForm):
     scratch_dir = StringField("Scratch directory", validators=[DataRequired(), Length(max=1024)])
+    smtp_host = StringField("SMTP host", validators=[Optional(), Length(max=255)])
+    smtp_port = IntegerField("SMTP port", validators=[Optional(), NumberRange(min=1, max=65535)], default=587)
+    smtp_from = StringField("From address", validators=[Optional(), Length(max=255)])
+    smtp_user = StringField("SMTP username", validators=[Optional(), Length(max=255)])
+    smtp_password = PasswordField("SMTP password", validators=[Optional(), Length(max=255)])
+    smtp_tls = BooleanField("Use STARTTLS", default=True)
     submit = SubmitField("Save settings")
 
 

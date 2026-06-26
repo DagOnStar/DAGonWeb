@@ -33,3 +33,29 @@ def runtime_dagon_config(path: Path, scratch_dir: Path) -> dict[str, dict[str, A
     config.setdefault("ftp_pub", {})
     config.setdefault("dagon_service", {}).setdefault("use", "False")
     return config
+
+
+def parse_dagon_ini(content: str) -> dict[str, dict[str, str]]:
+    parser = ConfigParser(interpolation=None)
+    parser.read_string(content)
+    return {section: dict(parser.items(section, raw=True)) for section in parser.sections()}
+
+
+def dump_dagon_ini(config: dict[str, dict[str, Any]]) -> str:
+    parser = ConfigParser(interpolation=None)
+    for section, values in config.items():
+        parser[section] = {key: str(value) for key, value in values.items()}
+    from io import StringIO
+
+    buffer = StringIO()
+    parser.write(buffer)
+    return buffer.getvalue()
+
+
+def merge_workflow_dagon_config(base: dict[str, dict[str, Any]], workflow_config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Apply the structured per-workflow DAGon settings to a base config."""
+    merged = {section: dict(values) for section, values in base.items()}
+    for section, values in workflow_config.items():
+        if isinstance(values, dict):
+            merged.setdefault(section, {}).update({str(key): value for key, value in values.items() if value not in (None, "")})
+    return merged

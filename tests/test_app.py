@@ -8,8 +8,8 @@ from app.extensions import db
 import pytest
 
 from app.executor.local import dagonstar_document, execute_task, materialize_native_sources, prepare_native_task_environments, safe_child
-from app.dagon_ini import runtime_dagon_config
-from app.models import TASK_TYPE_LABELS, Role, Setting, TaskRun, TaskType, User, Workflow, WorkflowLink, WorkflowRun, WorkflowTask
+from app.dagon_ini import merge_workflow_dagon_config, runtime_dagon_config
+from app.models import TASK_TYPE_LABELS, RegistrationToken, Role, Setting, TaskRun, TaskType, User, Workflow, WorkflowLink, WorkflowRun, WorkflowTask
 from app.workflows.routes import apply_import_layout, apply_workflow_template, validate_graph_payload, workflow_python_source
 
 
@@ -47,6 +47,96 @@ def test_admin_can_edit_dagon_ini_and_runtime_preserves_scratch_safety(tmp_path)
     assert config["dagon_service"]["use"] == "True"
 
 
+def test_workflow_setup_saves_per_workflow_dagon_config():
+    app = make_app()
+    with app.app_context():
+        admin = User.query.filter_by(email="admin@example.org").one()
+        workflow = Workflow(owner_id=admin.id, name="Configurable_workflow")
+        db.session.add(workflow)
+        db.session.commit()
+        admin_id = str(admin.id)
+        workflow_id = workflow.id
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = admin_id
+        session["_fresh"] = True
+
+    response = client.post(
+        f"/workflows/{workflow_id}/setup",
+        data={
+            "name": "Configurable_workflow",
+            "description": "",
+            "batch_threads": "8",
+            "dagon_service_route": "http://dagon.example:57009",
+            "dagon_service_use": "y",
+            "ftp_pub_ip": "ftp.example",
+            "dagon_ini_content": "",
+        },
+    )
+
+    assert response.status_code == 302
+    with app.app_context():
+        workflow = db.session.get(Workflow, workflow_id)
+        assert workflow.dagon_ini["batch"]["threads"] == "8"
+        config = merge_workflow_dagon_config({"batch": {"scratch_dir_base": "/scratch", "remove_dir": False}}, workflow.dagon_ini)
+        assert config["batch"]["threads"] == "8"
+        assert config["batch"]["scratch_dir_base"] == "/scratch"
+        assert config["dagon_service"]["use"] == "True"
+
+
+def test_admin_setup_saves_smtp_settings():
+    app = make_app()
+    with app.app_context():
+        admin_id = str(User.query.filter_by(email="admin@example.org").one().id)
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = admin_id
+        session["_fresh"] = True
+
+    response = client.post(
+        "/admin/settings",
+        data={
+            "scratch_dir": "/scratch/dagonweb",
+            "smtp_host": "smtp.example.org",
+            "smtp_port": "587",
+            "smtp_from": "dagonweb@example.org",
+            "smtp_user": "mailer",
+            "smtp_password": "secret",
+            "smtp_tls": "y",
+        },
+    )
+
+    assert response.status_code == 302
+    with app.app_context():
+        assert Setting.query.filter_by(key="smtp_host").one().value == "smtp.example.org"
+        assert Setting.query.filter_by(key="smtp_tls").one().value == "true"
+
+
+def test_registration_requires_email_verification_link():
+    app = make_app()
+    client = app.test_client()
+
+    response = client.post("/register", data={"email": "new@example.org"})
+
+    assert response.status_code == 302
+    with app.app_context():
+        assert RegistrationToken.query.filter_by(email="new@example.org", used_at=None).count() == 1
+        token = app.extensions["dagonweb_last_registration"]["token"]
+
+    complete = client.post(
+        "/register/complete",
+        data={"token": token, "password": "longpassword", "confirm": "longpassword"},
+    )
+
+    assert complete.status_code == 302
+    with app.app_context():
+        user = User.query.filter_by(email="new@example.org").one()
+        assert user.name == "new@example.org"
+        assert RegistrationToken.query.filter_by(email="new@example.org", used_at=None).count() == 0
+
+
 def test_dagon_ini_editor_rejects_invalid_ini():
     app = make_app()
     with app.app_context():
@@ -58,6 +148,24 @@ def test_dagon_ini_editor_rejects_invalid_ini():
     response = client.post("/admin/dagon-ini", data={"content": "not an ini section"})
     assert response.status_code == 200
     assert b"Invalid INI configuration" in response.data
+
+
+def test_dagon_ini_editor_exposes_advanced_editing_guidance():
+    app = make_app()
+    with app.app_context():
+        admin_id = str(User.query.filter_by(email="admin@example.org").one().id)
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = admin_id
+        session["_fresh"] = True
+
+    response = client.get("/admin/dagon-ini")
+
+    assert response.status_code == 200
+    assert b"Edit global dagon.ini" in response.data
+    assert b"dagonIniLines" in response.data
+    assert b"Safety notes" in response.data
+    assert b"workflow-specific values" in response.data
 
 
 def test_workflow_link_uri_contract():

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from flask import current_app
-from ..dagon_ini import runtime_dagon_config
+from ..dagon_ini import merge_workflow_dagon_config, runtime_dagon_config
 from ..extensions import db
 from ..models import LEGACY_TASK_TYPES, RunStatus, Setting, TaskRun, Workflow, WorkflowRun
 
@@ -143,7 +143,7 @@ def execute_workflow(workflow: Workflow, user_id: int, run: WorkflowRun | None =
         prepare_native_task_environments(workflow, root, runtime_document)
         runtime = DagonStarWorkflow(
             workflow.name,
-            config=runtime_dagon_config(Path(current_app.config["DAGON_INI_PATH"]), root),
+            config=merge_workflow_dagon_config(runtime_dagon_config(Path(current_app.config["DAGON_INI_PATH"]), root), workflow.dagon_ini),
             jsonload=runtime_document,
         )
         if module_root:

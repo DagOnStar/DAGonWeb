@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+from configparser import Error as ConfigParserError
 from io import BytesIO
 from threading import Thread
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -11,9 +12,10 @@ import networkx as nx
 from flask import Blueprint, Response, abort, current_app, flash, jsonify, redirect, render_template, request, send_file, url_for
 from flask_login import current_user, login_required
 from ..extensions import db
+from ..dagon_ini import dump_dagon_ini, parse_dagon_ini
 from ..models import TASK_TYPE_LABELS, TaskRun, TaskType, Workflow, WorkflowLink, WorkflowTask, WorkflowRun
 from ..executor.local import execute_workflow, list_directory, list_files, preview_task_file, safe_child, scratch_root
-from .forms import DAGONSTAR_NAME_RE, WorkflowForm, RunForm
+from .forms import DAGONSTAR_NAME_RE, RunForm, WorkflowForm, WorkflowSetupForm
 
 bp = Blueprint("workflows", __name__)
 WORKFLOW_REFERENCE = re.compile(r"workflow://(?P<workflow>[A-Za-z0-9_-]{0,80})/(?P<task>[A-Za-z0-9_-]{1,80})/(?P<path>[^\s;]+)")
@@ -318,6 +320,43 @@ def edit_workflow(workflow_id):
         flash("Workflow updated.", "success")
         return redirect(url_for("workflows.list_workflows"))
     return render_template("workflows/form.html", form=form, title="Edit workflow")
+
+
+@bp.route("/<int:workflow_id>/setup", methods=["GET", "POST"])
+@login_required
+def workflow_setup(workflow_id: int):
+    wf = db.get_or_404(Workflow, workflow_id)
+    if not can_edit(wf):
+        abort(403)
+    config = wf.dagon_ini
+    form = WorkflowSetupForm(obj=wf)
+    if not form.is_submitted():
+        form.batch_threads.data = int(config.get("batch", {}).get("threads", 1) or 1)
+        form.dagon_service_route.data = config.get("dagon_service", {}).get("route", "")
+        form.dagon_service_use.data = str(config.get("dagon_service", {}).get("use", "False")).lower() in {"1", "true", "yes"}
+        form.ftp_pub_ip.data = config.get("ftp_pub", {}).get("ip", "")
+        form.dagon_ini_content.data = ""
+    if form.validate_on_submit():
+        wf.name = validate_dagonstar_name(form.name.data, "Workflow name")
+        wf.description = form.description.data or ""
+        wf.is_public = form.is_public.data
+        advanced = (form.dagon_ini_content.data or "").strip()
+        if advanced:
+            try:
+                wf.dagon_ini = parse_dagon_ini(advanced)
+            except ConfigParserError as exc:
+                form.dagon_ini_content.errors.append(f"Invalid INI configuration: {exc}")
+                return render_template("workflows/form.html", form=form, title="Workflow setup", setup_mode=True)
+        else:
+            wf.dagon_ini = {
+                "batch": {"threads": str(form.batch_threads.data or 1)},
+                "dagon_service": {"route": form.dagon_service_route.data or "", "use": "True" if form.dagon_service_use.data else "False"},
+                "ftp_pub": {"ip": form.ftp_pub_ip.data or ""},
+            }
+        db.session.commit()
+        flash("Workflow setup saved.", "success")
+        return redirect(url_for("workflows.list_workflows"))
+    return render_template("workflows/form.html", form=form, title="Workflow setup", setup_mode=True)
 
 
 @bp.post("/<int:workflow_id>/rename")

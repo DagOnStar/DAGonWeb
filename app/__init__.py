@@ -67,4 +67,15 @@ def seed_defaults(app: Flask) -> None:
         db.session.add(user)
     if not Setting.query.filter_by(key="scratch_dir").first():
         db.session.add(Setting(key="scratch_dir", value=app.config["SCRATCH_DIR"]))
+    defaults = {
+        "smtp_host": "",
+        "smtp_port": "587",
+        "smtp_from": "noreply@localhost",
+        "smtp_user": "",
+        "smtp_password": "",
+        "smtp_tls": "true",
+    }
+    for key, value in defaults.items():
+        if not Setting.query.filter_by(key=key).first():
+            db.session.add(Setting(key=key, value=value))
     db.session.commit()
