@@ -2,6 +2,45 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3"><div><h1 class="h3 mb-0">{{ run.label or 'Run ' ~ run.id }}</h1><span id="runStatus" class="badge text-bg-secondary">{{ run.status }}</span></div><div class="d-flex gap-2"><form method="post" action="{{ url_for('workflows.run_workflow', workflow_id=workflow.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-success">Run workflow</button></form><a class="btn btn-outline-secondary" href="{{ url_for('workflows.edit_run', run_id=run.id) }}">Edit</a><a class="btn btn-outline-secondary" href="{{ url_for('workflows.list_runs') }}">All runs</a><a class="btn btn-outline-secondary" href="{{ url_for('workflows.editor', workflow_id=workflow.id) }}">Back to canvas</a></div></div>
 <div id="runLayout" class="row g-3 run-layout"><div class="col-lg" id="runWorkspaceColumn"><div id="runWorkspace" class="run-workspace"><svg id="runLinks"></svg></div></div><div class="col-lg-auto run-details-column" id="runDetailsColumn"><div id="runDetailsResizer" class="run-details-resizer" role="separator" aria-label="Resize task details panel" aria-orientation="vertical" tabindex="0"></div><div class="card h-100"><div class="card-header">Task details</div><div id="runInspector" class="card-body"><p class="text-muted">Select a completed task to inspect its scratch files.</p></div></div></div></div>
+<section class="card mt-3" aria-labelledby="fairHeading">
+  <div id="fairHeading" class="card-header d-flex justify-content-between align-items-center">
+    <span>FAIR provenance</span>
+    {% if fair.enabled %}<span class="badge text-bg-primary">Enabled</span>{% else %}<span class="badge text-bg-secondary">Not enabled</span>{% endif %}
+  </div>
+  <div class="card-body">
+    {% if fair.files %}
+      <div class="row g-2 mb-3">
+        {% for file in fair.files %}
+          <div class="col-md-4">
+            <a class="btn btn-outline-primary w-100 text-start" href="{{ url_for('workflows.download_fair_export', workflow_id=workflow.id, run_id=run.id, filename=file.name) }}">
+              <span class="d-block">{{ file.label }}</span>
+              <span class="small text-muted">{{ file.name }} · {{ file.size }} bytes</span>
+            </a>
+          </div>
+        {% endfor %}
+      </div>
+    {% elif fair.enabled %}
+      <p class="text-muted mb-0">No FAIR export files have been recorded for this run yet.</p>
+    {% else %}
+      <p class="text-muted mb-0">Enable FAIR provenance in workflow setup to record local metadata exports on future runs.</p>
+    {% endif %}
+    {% if fair.report %}
+      {% set warnings = fair.report.get('warnings', []) %}
+      {% set errors = fair.report.get('errors', []) %}
+      <div class="d-flex gap-2 mb-2">
+        <span class="badge text-bg-danger">{{ errors|length }} errors</span>
+        <span class="badge text-bg-warning">{{ warnings|length }} warnings</span>
+      </div>
+      {% if errors or warnings %}
+        <ul class="mb-0">
+          {% for issue in errors + warnings %}
+            <li>{{ issue }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    {% endif %}
+  </div>
+</section>
 <section class="card mt-3" aria-labelledby="runLogHeading"><div id="runLogHeading" class="card-header">Live execution log</div><div class="card-body p-0"><pre id="runLog" class="run-log bg-dark text-light m-0 p-3 mono small" aria-live="polite">Waiting for workflow activity…</pre></div></section>
 {% endblock %}
 {% block scripts %}

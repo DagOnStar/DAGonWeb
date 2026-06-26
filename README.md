@@ -20,6 +20,7 @@ DAGonStar is a lightweight Python workflow engine for directed acyclic graphs th
 - Native task output mappings are passed to the Python callable as keyword arguments, so demo callables write their declared output files directly.
 - DAGonStar JSON import/export and direct Python workflow generation.
 - Asynchronous server-side runs with live task status and scratch artifact browsing/downloads.
+- Optional FAIR provenance profile UI with run-level access to DAGonStar metadata exports such as RO-Crate, PROV, DataCite, CodeMeta, checksums, and FAIR reports.
 - Admin setup panel for scratch directory path and SMTP email verification.
 - Guided global `dagon.ini` console for DAGon service, batch, Slurm, cloud, LLM provider, logging, and raw INI editing.
 - Per-workflow DAGonStar setup for common `dagon.ini` values, with raw INI editing kept as an advanced option.

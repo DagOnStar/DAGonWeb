@@ -52,6 +52,47 @@
             {% for error in form.dagon_ini_content.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
           </div>
         </details>
+        <h2 class="h5 mt-4">FAIR provenance</h2>
+        <div class="form-check mb-3">
+          {{ form.fair_enabled(class='form-check-input') }}
+          {{ form.fair_enabled.label(class='form-check-label') }}
+        </div>
+        <div class="row g-3">
+          <div class="col-md-8">
+            {{ form.fair_title.label(class='form-label') }}
+            {{ form.fair_title(class='form-control') }}
+          </div>
+          <div class="col-md-4">
+            {{ form.fair_license.label(class='form-label') }}
+            {{ form.fair_license(class='form-control', placeholder='Apache-2.0') }}
+          </div>
+          <div class="col-12">
+            {{ form.fair_creators.label(class='form-label') }}
+            {{ form.fair_creators(class='form-control', rows=3, placeholder='One creator per line') }}
+          </div>
+          <div class="col-md-7">
+            {{ form.fair_keywords.label(class='form-label') }}
+            {{ form.fair_keywords(class='form-control', placeholder='workflow, simulation, dataset') }}
+          </div>
+          <div class="col-md-5">
+            {{ form.fair_access_policy.label(class='form-label') }}
+            {{ form.fair_access_policy(class='form-control', placeholder='local metadata, restricted data') }}
+          </div>
+          <div class="col-md-7">
+            {{ form.fair_environment_allowlist.label(class='form-label') }}
+            {{ form.fair_environment_allowlist(class='form-control', placeholder='PYTHONPATH, OMP_NUM_THREADS') }}
+          </div>
+          <div class="col-md-5 d-flex align-items-end gap-4">
+            <div class="form-check mb-2">
+              {{ form.fair_strict(class='form-check-input') }}
+              {{ form.fair_strict.label(class='form-check-label') }}
+            </div>
+            <div class="form-check mb-2">
+              {{ form.fair_capture_environment(class='form-check-input') }}
+              {{ form.fair_capture_environment.label(class='form-check-label') }}
+            </div>
+          </div>
+        </div>
       {% endif %}
       <div class="d-flex gap-2">
         {{ form.submit(class='btn btn-primary') }}

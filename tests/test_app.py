@@ -782,3 +782,83 @@ def test_run_status_includes_live_run_and_task_logs(tmp_path):
     assert len(payload["tasks"]) == 1
     assert payload["tasks"][0]["name"] == "task"
     assert payload["tasks"][0]["log"] == "[time] Task task started.\n"
+
+
+def test_workflow_setup_saves_fair_profile_and_exports_it():
+    app = make_app()
+    with app.app_context():
+        admin = User.query.filter_by(email="admin@example.org").one()
+        workflow = Workflow(owner_id=admin.id, name="Fair_workflow", description="Reusable data")
+        db.session.add(workflow)
+        db.session.commit()
+        admin_id, workflow_id = str(admin.id), workflow.id
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = admin_id
+        session["_fresh"] = True
+    response = client.post(
+        f"/workflows/{workflow_id}/setup",
+        data={
+            "name": "Fair_workflow",
+            "description": "Reusable data",
+            "is_public": "y",
+            "batch_threads": "2",
+            "fair_enabled": "y",
+            "fair_title": "FAIR run",
+            "fair_creators": "Ada Lovelace\nGrace Hopper",
+            "fair_license": "Apache-2.0",
+            "fair_keywords": "workflow, provenance",
+            "fair_access_policy": "local metadata",
+            "fair_strict": "y",
+            "fair_capture_environment": "y",
+            "fair_environment_allowlist": "OMP_NUM_THREADS, PYTHONPATH",
+        },
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    with app.app_context():
+        workflow = db.session.get(Workflow, workflow_id)
+        profile = workflow.fair_profile
+        assert profile["enabled"] is True
+        assert profile["creators"] == [{"name": "Ada Lovelace"}, {"name": "Grace Hopper"}]
+        assert profile["keywords"] == ["workflow", "provenance"]
+        assert workflow.as_json()["dagonweb"]["fair"]["title"] == "FAIR run"
+
+
+def test_run_detail_lists_and_downloads_fair_exports(tmp_path):
+    app = make_app()
+    app.config["SCRATCH_DIR"] = str(tmp_path)
+    with app.app_context():
+        owner = User(email="fair@example.org", name="Fair", active=True)
+        owner.set_password("password123")
+        db.session.add(owner)
+        db.session.flush()
+        workflow = Workflow(owner_id=owner.id, name="Fair_workflow")
+        workflow.fair_profile = {"enabled": True}
+        db.session.add(workflow)
+        db.session.flush()
+        Setting.query.filter_by(key="scratch_dir").one().value = str(tmp_path)
+        run_base = tmp_path / f"workflow-{workflow.id}" / "run-1"
+        run_dir = run_base / ".dagon" / "fair" / "Fair_workflow" / "run-uuid"
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text('{"id": "run-uuid"}', encoding="utf-8")
+        (run_dir / "fairness-report.json").write_text('{"warnings": ["Missing license"], "errors": []}', encoding="utf-8")
+        run = WorkflowRun(workflow_id=workflow.id, user_id=owner.id, status="success", scratch_path=str(run_base), log="")
+        db.session.add(run)
+        db.session.commit()
+        owner_id, workflow_id, run_id = str(owner.id), workflow.id, run.id
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = owner_id
+        session["_fresh"] = True
+    detail = client.get(f"/workflows/{workflow_id}/runs/{run_id}")
+    assert detail.status_code == 200
+    assert b"FAIR provenance" in detail.data
+    assert b"RO-Crate" not in detail.data
+    assert b"Run metadata" in detail.data
+    assert b"Missing license" in detail.data
+    download = client.get(f"/workflows/{workflow_id}/runs/{run_id}/fair/run.json")
+    assert download.status_code == 200
+    assert download.data == b'{"id": "run-uuid"}'

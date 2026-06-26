@@ -50,6 +50,34 @@ def dagonstar_document(workflow: Workflow) -> dict[str, Any]:
     return document
 
 
+def enable_fair_if_configured(runtime: Any, workflow: Workflow, run_dir: Path) -> None:
+    profile = workflow.fair_profile
+    if not profile.get("enabled"):
+        return
+    try:
+        from dagon.fair import AccessPolicy, Agent, FairProfile
+    except ImportError as exc:
+        raise RuntimeError("The installed DAGonStar package does not provide dagon.fair.") from exc
+
+    creators = []
+    for creator in profile.get("creators", []):
+        if isinstance(creator, dict) and creator.get("name"):
+            creators.append(Agent(name=creator["name"]))
+    fair_profile = FairProfile(
+        title=profile.get("title") or workflow.name,
+        description=profile.get("description") or workflow.description or "",
+        creators=creators,
+        license=profile.get("license") or "",
+        keywords=profile.get("keywords") or [],
+        access_policy=AccessPolicy(metadata=profile.get("access_policy") or "local", data=profile.get("access_policy") or "local"),
+        strict=bool(profile.get("strict", False)),
+        output_dir=str(safe_child(run_dir, ".dagon", "fair", workflow.name)),
+        capture_environment=bool(profile.get("capture_environment", False)),
+        environment_allowlist=profile.get("environment_allowlist") or [],
+    )
+    runtime.enable_fair(fair_profile)
+
+
 def prepare_native_task_environments(workflow: Workflow, root: Path, document: dict[str, Any]) -> None:
     """Install each Native task's declared requirements in its own scratch venv."""
     environment_root = safe_child(root, f"workflow-{workflow.id}", "native_environments")
@@ -146,6 +174,7 @@ def execute_workflow(workflow: Workflow, user_id: int, run: WorkflowRun | None =
             config=merge_workflow_dagon_config(runtime_dagon_config(Path(current_app.config["DAGON_INI_PATH"]), root), workflow.dagon_ini),
             jsonload=runtime_document,
         )
+        enable_fair_if_configured(runtime, workflow, run_dir)
         if module_root:
             sys.path.remove(str(module_root))
         task_runs = {task.name: TaskRun(workflow_run_id=run.id, task_uid=task.name, status=RunStatus.PENDING.value, scratch_path=str(run_dir), log="") for task in runtime.tasks}

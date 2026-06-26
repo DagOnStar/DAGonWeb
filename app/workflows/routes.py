@@ -19,6 +19,17 @@ from .forms import DAGONSTAR_NAME_RE, RunForm, WorkflowForm, WorkflowSetupForm
 
 bp = Blueprint("workflows", __name__)
 WORKFLOW_REFERENCE = re.compile(r"workflow://(?P<workflow>[A-Za-z0-9_-]{0,80})/(?P<task>[A-Za-z0-9_-]{1,80})/(?P<path>[^\s;]+)")
+FAIR_EXPORT_FILES = {
+    "run.json": "Run metadata",
+    "ro-crate-metadata.json": "RO-Crate JSON-LD",
+    "prov.json": "PROV graph",
+    "datacite.json": "DataCite JSON",
+    "codemeta.json": "CodeMeta JSON-LD",
+    "checksums.sha256": "SHA-256 checksums",
+    "fairness-report.json": "FAIR validation report",
+    "report.md": "Markdown report",
+    "report.html": "HTML report",
+}
 
 
 def validate_dagonstar_name(name: str, label: str = "Name") -> str:
@@ -130,6 +141,84 @@ def remove_run_scratch(run: WorkflowRun) -> None:
         shutil.rmtree(run_root)
 
 
+def split_lines(value: str) -> list[str]:
+    return [item.strip() for item in re.split(r"[\n,]+", value or "") if item.strip()]
+
+
+def fair_profile_from_form(form: WorkflowSetupForm, workflow: Workflow) -> dict:
+    creators = [{"name": name} for name in split_lines(form.fair_creators.data or "")]
+    return {
+        "enabled": bool(form.fair_enabled.data),
+        "title": form.fair_title.data or workflow.name,
+        "description": form.description.data or workflow.description or "",
+        "creators": creators,
+        "license": form.fair_license.data or "",
+        "keywords": split_lines(form.fair_keywords.data or ""),
+        "access_policy": form.fair_access_policy.data or "",
+        "strict": bool(form.fair_strict.data),
+        "capture_environment": bool(form.fair_capture_environment.data),
+        "environment_allowlist": split_lines(form.fair_environment_allowlist.data or ""),
+    }
+
+
+def populate_fair_form(form: WorkflowSetupForm, workflow: Workflow) -> None:
+    profile = workflow.fair_profile
+    form.fair_enabled.data = bool(profile.get("enabled", False))
+    form.fair_title.data = profile.get("title") or workflow.name
+    form.fair_creators.data = "\n".join(creator.get("name", "") for creator in profile.get("creators", []) if isinstance(creator, dict))
+    form.fair_license.data = profile.get("license", "")
+    form.fair_keywords.data = ", ".join(profile.get("keywords", []))
+    form.fair_access_policy.data = profile.get("access_policy", "")
+    form.fair_strict.data = bool(profile.get("strict", False))
+    form.fair_capture_environment.data = bool(profile.get("capture_environment", False))
+    form.fair_environment_allowlist.data = ", ".join(profile.get("environment_allowlist", []))
+
+
+def run_file_path(run: WorkflowRun, relative_path: str) -> Path:
+    root = scratch_root()
+    run_root = Path(run.scratch_path).resolve()
+    if root not in run_root.parents and run_root != root:
+        raise ValueError("Unsafe run path")
+    return safe_child(run_root, relative_path)
+
+
+def fair_export_root(run: WorkflowRun) -> Path | None:
+    if not run.scratch_path:
+        return None
+    try:
+        run_root = run_file_path(run, "")
+    except ValueError:
+        return None
+    direct = [run_root / name for name in FAIR_EXPORT_FILES]
+    if any(path.is_file() for path in direct):
+        return run_root
+    fair_root = run_root / ".dagon" / "fair"
+    if fair_root.is_dir():
+        candidates = [path for path in fair_root.rglob("run.json") if path.is_file()]
+        if candidates:
+            return max((path.parent for path in candidates), key=lambda path: path.stat().st_mtime)
+    return None
+
+
+def fair_exports(run: WorkflowRun) -> dict:
+    root = fair_export_root(run)
+    if not root:
+        return {"enabled": bool(run.workflow.fair_profile.get("enabled")), "files": [], "report": None}
+    files = []
+    for filename, label in FAIR_EXPORT_FILES.items():
+        path = root / filename
+        if path.is_file():
+            files.append({"name": filename, "label": label, "size": path.stat().st_size})
+    report = None
+    report_path = root / "fairness-report.json"
+    if report_path.is_file():
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            report = None
+    return {"enabled": True, "files": files, "report": report}
+
+
 def validate_graph_payload(payload: object) -> tuple[list[dict], list[dict]]:
     if not isinstance(payload, dict):
         raise ValueError("Graph payload must be an object.")
@@ -238,6 +327,8 @@ def task_workflow_references(task: dict, current_workflow_name: str = "") -> lis
 
 def apply_workflow_document(workflow: Workflow, document: object, auto_layout: bool = False) -> None:
     tasks, links = validate_graph_payload(document)
+    if isinstance(document, dict) and isinstance(document.get("dagonweb"), dict):
+        workflow.dagonweb = document["dagonweb"]
     if auto_layout:
         apply_import_layout(tasks, links)
     workflow.tasks.clear()
@@ -336,10 +427,12 @@ def workflow_setup(workflow_id: int):
         form.dagon_service_use.data = str(config.get("dagon_service", {}).get("use", "False")).lower() in {"1", "true", "yes"}
         form.ftp_pub_ip.data = config.get("ftp_pub", {}).get("ip", "")
         form.dagon_ini_content.data = ""
+        populate_fair_form(form, wf)
     if form.validate_on_submit():
         wf.name = validate_dagonstar_name(form.name.data, "Workflow name")
         wf.description = form.description.data or ""
         wf.is_public = form.is_public.data
+        wf.fair_profile = fair_profile_from_form(form, wf)
         advanced = (form.dagon_ini_content.data or "").strip()
         if advanced:
             try:
@@ -630,7 +723,29 @@ def run_detail(workflow_id, run_id):
         abort(404)
     if not can_access_run(run):
         abort(403)
-    return render_template("workflows/run.html", workflow=wf, run=run)
+    return render_template("workflows/run.html", workflow=wf, run=run, fair=fair_exports(run))
+
+
+@bp.get("/<int:workflow_id>/runs/<int:run_id>/fair/<path:filename>")
+@login_required
+def download_fair_export(workflow_id: int, run_id: int, filename: str):
+    run = db.get_or_404(WorkflowRun, run_id)
+    if run.workflow_id != workflow_id:
+        abort(404)
+    if not can_access_run(run):
+        abort(403)
+    if filename not in FAIR_EXPORT_FILES:
+        abort(404)
+    root = fair_export_root(run)
+    if not root:
+        abort(404)
+    try:
+        path = safe_child(root, filename)
+    except ValueError:
+        abort(403)
+    if not path.is_file():
+        abort(404)
+    return send_file(path, as_attachment=True, download_name=filename)
 
 
 @bp.get("/<int:workflow_id>/runs/<int:run_id>/status")

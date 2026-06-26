@@ -111,6 +111,7 @@ class Workflow(TimestampMixin, db.Model):
     description = db.Column(db.Text, default="")
     is_public = db.Column(db.Boolean, default=False, nullable=False)
     dagon_ini_json = db.Column(db.Text, default="{}")
+    dagonweb_json = db.Column(db.Text, default="{}")
     owner = db.relationship("User", backref=db.backref("workflows", lazy="dynamic"))
     tasks = db.relationship("WorkflowTask", cascade="all, delete-orphan", backref="workflow", lazy="joined")
     links = db.relationship("WorkflowLink", cascade="all, delete-orphan", backref="workflow", lazy="joined")
@@ -122,6 +123,25 @@ class Workflow(TimestampMixin, db.Model):
     @dagon_ini.setter
     def dagon_ini(self, value: dict[str, Any]) -> None:
         self.dagon_ini_json = json.dumps(value, indent=2, sort_keys=True)
+
+    @property
+    def dagonweb(self) -> dict[str, Any]:
+        return json.loads(self.dagonweb_json or "{}")
+
+    @dagonweb.setter
+    def dagonweb(self, value: dict[str, Any]) -> None:
+        self.dagonweb_json = json.dumps(value, indent=2, sort_keys=True)
+
+    @property
+    def fair_profile(self) -> dict[str, Any]:
+        profile = self.dagonweb.get("fair", {})
+        return profile if isinstance(profile, dict) else {}
+
+    @fair_profile.setter
+    def fair_profile(self, value: dict[str, Any]) -> None:
+        metadata = self.dagonweb
+        metadata["fair"] = value
+        self.dagonweb = metadata
 
     def as_json(self) -> dict[str, Any]:
         tasks: dict[str, dict[str, Any]] = {}
@@ -176,7 +196,10 @@ class Workflow(TimestampMixin, db.Model):
             if link.source_uid in tasks and link.target_uid in tasks:
                 tasks[link.source_uid]["nexts"].append(link.target_uid)
                 tasks[link.target_uid]["prevs"].append(link.source_uid)
-        return {"tasks": tasks, "name": self.name, "id": self.id, "host": "localhost"}
+        document = {"tasks": tasks, "name": self.name, "id": self.id, "host": "localhost"}
+        if self.dagonweb:
+            document["dagonweb"] = self.dagonweb
+        return document
 
     def to_graph_json(self) -> dict[str, Any]:
         """Backward-compatible alias for the portable workflow document."""
