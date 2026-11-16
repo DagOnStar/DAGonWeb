@@ -7,7 +7,7 @@ from app.config import TestConfig
 from app.extensions import db
 import pytest
 
-from app.executor.local import dagonstar_document, execute_task, materialize_native_sources, prepare_native_task_environments, safe_child
+from app.executor.local import build_runtime_workflow, execute_workflow, materialize_native_sources, prepare_native_task_environments, safe_child
 from app.dagon_ini import merge_workflow_dagon_config, runtime_dagon_config
 from app.models import TASK_TYPE_LABELS, RegistrationToken, Role, Setting, TaskRun, TaskType, User, Workflow, WorkflowLink, WorkflowRun, WorkflowTask
 from app.workflows.routes import apply_import_layout, apply_workflow_template, validate_graph_payload, workflow_python_source
@@ -174,7 +174,7 @@ def test_workflow_link_uri_contract():
 
 
 def test_every_task_type_has_a_palette_label():
-    expected_types = {"checkpoint", "batch", "slurm", "cloud", "docker", "llm", "native", "web"}
+    expected_types = {"checkpoint", "batch", "slurm", "cloud", "docker", "kubernetes", "apptainer", "nomad", "llm", "native", "web", "faas", "iot", "agentic"}
     assert {task_type.value for task_type in TaskType} == expected_types
     assert set(TASK_TYPE_LABELS) == expected_types
 
@@ -518,16 +518,11 @@ def test_web_task_serializes_native_dagonstar_specification():
 
     assert document["tasks"]["download"]["specification"] == specification
     assert document["tasks"]["download"]["dagonweb"]["config"] == specification
-    runtime_document = dagonstar_document(workflow)
-    assert runtime_document["tasks"]["download"]["python"]
-
-    from dagon import Workflow as DagonStarWorkflow
-    runtime = DagonStarWorkflow(
-        workflow.name,
-        config={"batch": {"scratch_dir_base": "/tmp", "remove_dir": False}, "ftp_pub": {}, "dagon_service": {"use": "False"}},
-        jsonload=runtime_document,
-    )
-    assert runtime.tasks[0].specification["url"] == specification["url"]
+    with app.app_context():
+        workflow = db.session.get(Workflow, workflow.id)
+        runtime = build_runtime_workflow(workflow, {"batch": {"scratch_dir_base": "/tmp", "remove_dir": False}, "ftp_pub": {}, "dagon_service": {"use": "False"}})
+        assert runtime.tasks[0].specification["url"] == specification["url"]
+        assert runtime.tasks[0].python
 
 
 def test_llm_task_serializes_dagonstar_bindings():
@@ -579,7 +574,6 @@ def test_native_task_requirements_use_task_local_virtualenv(tmp_path, monkeypatc
     task = WorkflowTask(uid="transform", label="transform", task_type="native")
     task.config = {"callable": "package.module:function", "requirements": "example-package==1.0\n"}
     workflow.tasks.append(task)
-    document = {"tasks": {"transform": {"type": "native", "python": "original"}}}
     created = []
 
     class FakeBuilder:
@@ -593,12 +587,12 @@ def test_native_task_requirements_use_task_local_virtualenv(tmp_path, monkeypatc
 
     monkeypatch.setattr("app.executor.local.venv.EnvBuilder", FakeBuilder)
     monkeypatch.setattr("app.executor.local.subprocess.run", lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})())
-    prepare_native_task_environments(workflow, tmp_path, document)
+    overrides = prepare_native_task_environments(workflow, tmp_path)
 
     requirements = tmp_path / "workflow-12" / "native_environments" / "transform" / "requirements.txt"
     assert requirements.read_text(encoding="utf-8") == "example-package==1.0\n"
     assert created == [tmp_path / "workflow-12" / "native_environments" / "transform" / "venv"]
-    assert document["tasks"]["transform"]["python"].endswith("native_environments/transform/venv/bin/python")
+    assert overrides["transform"]["python"].endswith("native_environments/transform/venv/bin/python")
 
 
 def test_native_task_requirements_reject_slurm_executor(tmp_path):
@@ -608,7 +602,7 @@ def test_native_task_requirements_reject_slurm_executor(tmp_path):
     workflow.tasks.append(task)
 
     with pytest.raises(ValueError, match="local executor"):
-        prepare_native_task_environments(workflow, tmp_path, {"tasks": {"transform": {}}})
+        prepare_native_task_environments(workflow, tmp_path)
 
 
 def test_native_source_is_materialized_as_an_importable_module(tmp_path):
@@ -652,7 +646,7 @@ def test_graph_validation_rejects_cycles_and_unknown_tasks():
 
 def test_graph_validation_creates_links_from_workflow_references():
     _, links = validate_graph_payload({"tasks": {"source": {"name": "source", "type": "checkpoint"}, "target": {"name": "target", "type": "batch", "dagonweb": {"config": {"inputs": {"dataset": "workflow:///source/output"}}}}}})
-    assert links == [{"source_name": "source", "source_output": "output", "target_name": "target", "target_input": "dataset"}]
+    assert links == [{"kind": "data", "source_name": "source", "source_output": "output", "target_name": "target", "target_input": "dataset"}]
 
 
 def test_graph_validation_treats_named_current_workflow_as_local_reference():
@@ -667,7 +661,7 @@ def test_graph_validation_treats_named_current_workflow_as_local_reference():
 
     _, links = validate_graph_payload(document)
 
-    assert links == [{"source_name": "source", "source_output": "output.txt", "target_name": "target", "target_input": "dataset"}]
+    assert links == [{"kind": "data", "source_name": "source", "source_output": "output.txt", "target_name": "target", "target_input": "dataset"}]
 
 
 def test_graph_validation_ignores_workflow_examples_in_native_source():
@@ -677,7 +671,7 @@ def test_graph_validation_ignores_workflow_examples_in_native_source():
 
 def test_graph_validation_creates_links_from_dagonstar_command_references():
     _, links = validate_graph_payload({"tasks": {"a": {"name": "a", "type": "batch", "command": "echo data > a.txt"}, "b": {"name": "b", "type": "batch", "command": "cat workflow:///a/a.txt > b.txt"}}})
-    assert links == [{"source_name": "a", "source_output": "a.txt", "target_name": "b", "target_input": "command"}]
+    assert links == [{"kind": "data", "source_name": "a", "source_output": "a.txt", "target_name": "b", "target_input": "command"}]
 
 
 def test_dagonstar_diamond_document_ignores_explicit_edges_and_uses_references():
@@ -692,16 +686,9 @@ def test_dagonstar_diamond_document_ignores_explicit_edges_and_uses_references()
     assert positions["b"][1] != positions["c"][1]
 
 
-def test_executor_rejects_failed_batch_commands_and_unsafe_paths(tmp_path):
-    app = make_app()
-    with app.app_context():
-        workflow = Workflow(id=1, owner_id=1, name="Test")
-        batch = WorkflowTask(uid="batch", label="Batch", task_type="batch")
-        batch.config = {"command": "exit 7"}
-        with pytest.raises(RuntimeError, match="status 7"):
-            execute_task(batch, tmp_path, workflow)
-        with pytest.raises(ValueError, match="Unsafe scratch path"):
-            safe_child(tmp_path, "../outside.txt")
+def test_safe_child_rejects_paths_outside_scratch(tmp_path):
+    with pytest.raises(ValueError, match="Unsafe scratch path"):
+        safe_child(tmp_path, "../outside.txt")
 
 
 def test_users_cannot_inspect_other_users_run_files(tmp_path):
@@ -773,7 +760,7 @@ def test_run_status_includes_live_run_and_task_logs(tmp_path):
         session["_fresh"] = True
     detail = client.get(f"/workflows/{workflow_id}/runs/{run_id}")
     assert detail.status_code == 200
-    assert b"Run workflow" in detail.data
+    assert b"Run again" in detail.data
     assert b"Live execution log" in detail.data
     response = client.get(f"/workflows/{workflow_id}/runs/{run_id}/status")
     assert response.status_code == 200

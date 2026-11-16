@@ -11,5 +11,5 @@ psycopg2-binary==2.9.11
 gunicorn==22.0.0
 networkx==3.3
 netCDF4==1.7.2
--e git+https://github.com/DagOnStar/dagonstar.git@e1cb9d199567377b5e8fbe7d3aeaed2463038b70#egg=dagonstar
+dagonstar[docker,kubernetes] @ git+https://github.com/DagOnStar/dagonstar.git@a7e633feab5c28ec8624a16f1c95e5499ddc93d4
 email-validator==2.2.0

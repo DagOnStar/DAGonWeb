@@ -1,7 +1,50 @@
 # Workflow editor
 
-The editor has a palette, scrollable canvas, and resizable Inspector. Use **Expand** in the Inspector header to let it occupy the canvas area for larger configurations, then **Standard** to restore the normal width. It supports Checkpoint, Batch, Slurm, Cloud, Docker, LLM, Native, and Web DAGonStar tasks.
+The editor has three panes:
 
-Task names are unique and are the identity used by DAGonStar references. The Batch editor uses Ace with Bash syntax highlighting, automatic statement termination on Enter, and a beautifier. While editing a Batch script, click a canvas task to insert `workflow:///task/output` at the Ace cursor.
+- A **task palette**, grouped into Shell & HPC, Containers & orchestrators, Cloud/web/devices, and Python & AI, with a filter box.
+- A zoomable **canvas**.
+- A resizable **Inspector**. Use **Expand** to let it fill the canvas area, and **Standard** to restore it.
 
-Links are visual representations of same-workflow `workflow://` references. `workflow:///task/path` and `workflow://current_workflow/task/path` both render as local links; references to other workflow names remain in configuration without creating local edges. Applying configuration rebuilds links from all references; imported `nexts` and `prevs` are ignored. The canvas automatically saves edits and provides an **Organize canvas** action.
+All 14 DAGonStar task types are available. The palette and the Inspector forms are generated from the registry in `app/task_specs.py`, so a new DAGonStar option is added in one place.
+
+## Tasks
+
+- **Add a task**: click a palette item or drag it onto the canvas.
+- **Name it**: task names are unique and are the identity used by DAGonStar references. They use letters, numbers, `_` and `-`.
+- **Rename it**: renaming rewrites the matching `workflow:///old/...` references and the `explicit_prevs` entries in every task.
+- **Configure it**: the Inspector shows the basic fields first. An *Advanced* section holds the rest, and a raw JSON view is available for anything else.
+  - Commands use the Ace editor with Bash highlighting.
+  - While a command editor has focus, clicking a canvas task inserts `workflow:///task/output` at the cursor.
+- **Named inputs**: one `name = value` per line. Each name becomes a shell variable, for example `$data`, that holds the staged path. A value can be a `workflow:///task/path` reference or a plain value.
+- **Duplicate or delete** a task with the Inspector buttons or the keyboard shortcuts.
+
+## Links
+
+To connect two tasks, drag from a producer's right connector to a consumer's left connector. A dialog lets you choose the kind of link:
+
+- **Data link**: choose a producer file, with suggestions taken from the producer's outputs, and an input name. DAGonWeb adds `name = workflow:///producer/file` to the consumer's inputs. The link is drawn as a solid line.
+- **Explicit dependency**: the consumer runs after the producer without staging any data. The producer is added to the consumer's `explicit_prevs`, and the link is drawn dashed.
+
+To remove a link, click it. Links are always derived from the saved configuration:
+
+- `workflow:///task/path` and `workflow://<this workflow>/task/path` draw data links.
+- `explicit_prevs` draws explicit links.
+- References to other workflows stay in the configuration but draw nothing.
+
+## Saving
+
+Every change is saved automatically after a short pause, and the header shows *Saving…*, *All changes saved*, or the error. Leaving the page with unsaved changes asks for confirmation. **Run** saves first and then starts the run. **Organize** arranges the tasks in dependency layers, and **Fit** zooms to show the whole workflow.
+
+## Keyboard shortcuts
+
+| Keys | Action |
+| --- | --- |
+| Ctrl/⌘ + S | Apply the Inspector and save |
+| Ctrl/⌘ + Enter | Apply the Inspector |
+| Ctrl/⌘ + D | Duplicate the selected task |
+| Delete | Delete the selected task |
+| Arrow keys (Shift for faster) | Move the selected task |
+| Esc | Clear the selection |
+
+Press **?** in the editor toolbar to see these shortcuts.

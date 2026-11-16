@@ -1,8 +1,11 @@
 {% extends 'base.html' %}
-
+{% block title %}Workflows - DAGonWeb{% endblock %}
 {% block content %}
-<div class="d-flex justify-content-between align-items-center">
-  <h1>Workflows</h1>
+<div class="page-header">
+  <div>
+    <h1 class="h3">Workflows</h1>
+    <p class="page-subtitle">Design DAGonStar workflows visually, run them on the server, and inspect their scratch artifacts.</p>
+  </div>
   <div class="d-flex flex-wrap gap-2">
     <div class="btn-group">
       <a class="btn btn-primary" href="{{ url_for('workflows.create_workflow') }}">New workflow</a>
@@ -13,54 +16,111 @@
         <li><a class="dropdown-item" href="{{ url_for('workflows.create_workflow') }}">Default empty workflow</a></li>
         <li><hr class="dropdown-divider"></li>
         {% for template, label in template_options %}
-          <li><a class="dropdown-item" href="{{ url_for('workflows.create_workflow', template=template) }}">{{ label }}</a></li>
+          <li><a class="dropdown-item" href="{{ url_for('workflows.create_workflow', template=template) }}">{{ specs[template].icon }} {{ label }}</a></li>
         {% endfor %}
       </ul>
     </div>
-    <form method="post" action="{{ url_for('workflows.delete_all_workflows') }}" onsubmit="return confirm('Delete all workflows you can manage, including their runs?');">
+    <button class="btn btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#importPanel" aria-expanded="false" aria-controls="importPanel">Import JSON</button>
+    {% if workflows %}
+    <form method="post" action="{{ url_for('workflows.delete_all_workflows') }}" onsubmit="return confirm('Delete all workflows you can manage, including their runs and scratch files?');">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button class="btn btn-outline-danger">Delete all</button>
     </form>
+    {% endif %}
   </div>
 </div>
 
-<form class="card card-body my-3" method="post" action="{{ url_for('workflows.upload_workflow') }}" enctype="multipart/form-data">
+<form id="importPanel" class="collapse card card-body mb-3" method="post" action="{{ url_for('workflows.upload_workflow') }}" enctype="multipart/form-data">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <div class="row g-2 align-items-center">
-    <div class="col-auto"><label class="col-form-label" for="workflow_file">Import workflow JSON</label></div>
+  <label class="dropzone" id="dropzone" for="workflow_file">
+    <strong>Import workflow JSON</strong><br>
+    <span class="small">Drop a DAGonStar or DAGonWeb task-map document here, or choose a file. Dependencies are rebuilt from <code>workflow://</code> references and <code>explicit_prevs</code>.</span>
+  </label>
+  <div class="row g-2 align-items-center mt-2">
     <div class="col"><input id="workflow_file" class="form-control" type="file" name="workflow_file" accept="application/json,.json" required></div>
-    <div class="col-auto"><button class="btn btn-outline-primary">Upload</button></div>
+    <div class="col-auto"><button class="btn btn-primary">Upload</button></div>
   </div>
 </form>
 
-<div class="row g-3">
+<section class="mb-4" aria-labelledby="templatesHeading">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <h2 id="templatesHeading" class="h6 text-uppercase text-body-secondary mb-0">Start from a template</h2>
+    <button class="btn btn-sm btn-link" type="button" data-bs-toggle="collapse" data-bs-target="#templateGallery" aria-expanded="{{ 'false' if workflows else 'true' }}" aria-controls="templateGallery">Show or hide</button>
+  </div>
+  <div id="templateGallery" class="collapse {% if not workflows %}show{% endif %}">
+    <div class="row row-cols-1 row-cols-sm-2 row-cols-lg-4 row-cols-xxl-7 g-2">
+      {% for card in template_cards %}
+        <div class="col">
+          <a class="card template-card cat-{{ card.category }} h-100 text-decoration-none text-body" href="{{ url_for('workflows.create_workflow', template=card.key) }}">
+            <div class="card-body p-2">
+              <div class="d-flex align-items-center gap-2 mb-1"><span class="type-icon" aria-hidden="true">{{ card.icon }}</span><strong class="small">{{ card.label }}</strong></div>
+              <div class="small text-body-secondary">{{ card.description }}</div>
+            </div>
+          </a>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+{% if workflows %}
+<div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+  <h2 class="h6 text-uppercase text-body-secondary mb-0 me-auto">Your workflows <span class="badge text-bg-secondary">{{ workflows|length }}</span></h2>
+  <label class="visually-hidden" for="workflowFilter">Filter workflows</label>
+  <input id="workflowFilter" class="form-control form-control-sm" style="max-width:18rem" type="search" placeholder="Filter by name, owner or task type">
+</div>
+{% endif %}
+<div class="row g-3" id="workflowGrid">
   {% for wf in workflows %}
     {% set editable = wf.owner_id == current_user.id or current_user.has_role('admin') %}
-    <div class="col-md-4">
-      <div class="card h-100">
-        <div class="card-body">
-          <h2 class="h5">{{ wf.name }}</h2>
-          <p>{{ wf.description }}</p>
-          <p class="text-muted">Owner: {{ wf.owner.name }}{% if wf.is_public %} · public{% endif %}</p>
-          <div class="d-flex flex-wrap gap-2">
-            <a class="btn btn-sm btn-primary" href="{{ url_for('workflows.editor', workflow_id=wf.id) }}">Open editor</a>
-            {% if editable %}
-              <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.edit_workflow', workflow_id=wf.id) }}">Edit metadata</a>
-              <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.workflow_setup', workflow_id=wf.id) }}">Setup</a>
-              <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#renameWorkflow{{ wf.id }}" aria-expanded="false" aria-controls="renameWorkflow{{ wf.id }}">Rename</button>
+    {% set types = wf.tasks|map(attribute='normalized_task_type')|unique|list %}
+    {% set last = last_runs.get(wf.id) %}
+    <div class="col-md-6 col-xl-4 workflow-item" data-filter="{{ (wf.name ~ ' ' ~ wf.owner.name ~ ' ' ~ types|join(' '))|lower }}">
+      <div class="card workflow-card h-100">
+        <div class="card-body d-flex flex-column">
+          <div class="d-flex justify-content-between align-items-start gap-2">
+            <h3 class="h5 card-title mb-1"><a href="{{ url_for('workflows.editor', workflow_id=wf.id) }}">{{ wf.name }}</a></h3>
+            {% if last %}
+              <a class="badge text-decoration-none text-bg-{{ 'success' if last.status == 'success' else 'danger' if last.status == 'failed' else 'primary' }}" href="{{ url_for('workflows.run_detail', workflow_id=wf.id, run_id=last.id) }}" title="Latest run">{{ last.status }}</a>
             {% endif %}
-            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.download_workflow', workflow_id=wf.id) }}">Download JSON</a>
-            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.download_workflow_python', workflow_id=wf.id) }}">Generate Python</a>
+          </div>
+          <p class="small text-body-secondary mb-2">{{ wf.owner.name }}{% if wf.is_public %} · public{% endif %} · {{ wf.tasks|length }} task{{ '' if wf.tasks|length == 1 else 's' }}{% if wf.runtime_options.get('portable_emulation') %} · <span title="External back-ends are emulated locally">portable emulation</span>{% endif %}</p>
+          {% if wf.description %}<p class="mb-2">{{ wf.description }}</p>{% endif %}
+          <div class="d-flex flex-wrap gap-1 mb-3">
+            {% for task_type in types %}{% set spec = specs.get(task_type) %}{% if spec %}<span class="badge type-badge cat-{{ spec.category }}">{{ spec.icon }} {{ spec.label }}</span>{% endif %}{% endfor %}
+          </div>
+          <div class="d-flex flex-wrap gap-2 mt-auto">
+            <a class="btn btn-sm btn-primary" href="{{ url_for('workflows.editor', workflow_id=wf.id) }}">Open editor</a>
             <form class="d-inline" method="post" action="{{ url_for('workflows.run_workflow', workflow_id=wf.id) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <button class="btn btn-sm btn-success">Run</button>
+              <button class="btn btn-sm btn-success" {% if not wf.tasks %}disabled title="Add tasks first"{% endif %}>Run</button>
             </form>
             {% if editable %}
-              <form class="d-inline" method="post" action="{{ url_for('workflows.delete_workflow', workflow_id=wf.id) }}" onsubmit="return confirm('Delete this workflow and its runs?');">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button class="btn btn-sm btn-outline-danger">Delete</button>
-              </form>
+              <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.workflow_setup', workflow_id=wf.id) }}">Setup</a>
             {% endif %}
+            <div class="dropdown">
+              <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">More</button>
+              <ul class="dropdown-menu">
+                {% if editable %}
+                  <li><a class="dropdown-item" href="{{ url_for('workflows.edit_workflow', workflow_id=wf.id) }}">Edit metadata</a></li>
+                  <li><button class="dropdown-item" type="button" data-bs-toggle="collapse" data-bs-target="#renameWorkflow{{ wf.id }}" aria-expanded="false" aria-controls="renameWorkflow{{ wf.id }}">Rename</button></li>
+                  <li><hr class="dropdown-divider"></li>
+                {% endif %}
+                <li><h6 class="dropdown-header">Export</h6></li>
+                <li><a class="dropdown-item" href="{{ url_for('workflows.download_workflow', workflow_id=wf.id) }}">Download JSON</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('workflows.download_workflow_python', workflow_id=wf.id) }}">Generate Python</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('workflows.download_workflow_cwl', workflow_id=wf.id) }}">Export CWL</a></li>
+                {% if editable %}
+                  <li><hr class="dropdown-divider"></li>
+                  <li>
+                    <form method="post" action="{{ url_for('workflows.delete_workflow', workflow_id=wf.id) }}" onsubmit="return confirm('Delete this workflow, its runs and their scratch files?');">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button class="dropdown-item text-danger">Delete</button>
+                    </form>
+                  </li>
+                {% endif %}
+              </ul>
+            </div>
           </div>
           {% if editable %}
             <form id="renameWorkflow{{ wf.id }}" class="collapse mt-3" method="post" action="{{ url_for('workflows.rename_workflow', workflow_id=wf.id) }}">
@@ -77,7 +137,26 @@
       </div>
     </div>
   {% else %}
-    <p>No workflows yet.</p>
+    <div class="col-12"><div class="card card-body text-center text-body-secondary">No workflows yet. Pick a template above or create an empty workflow.</div></div>
   {% endfor %}
 </div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const filter = document.getElementById('workflowFilter');
+  if (filter) filter.addEventListener('input', () => {
+    const query = filter.value.trim().toLowerCase();
+    document.querySelectorAll('.workflow-item').forEach(item => { item.hidden = Boolean(query) && !item.dataset.filter.includes(query); });
+  });
+  const zone = document.getElementById('dropzone'), input = document.getElementById('workflow_file');
+  ['dragenter', 'dragover'].forEach(name => zone.addEventListener(name, event => { event.preventDefault(); zone.classList.add('dragover'); }));
+  ['dragleave', 'drop'].forEach(name => zone.addEventListener(name, event => { event.preventDefault(); zone.classList.remove('dragover'); }));
+  zone.addEventListener('drop', event => {
+    if (!event.dataTransfer.files.length) return;
+    input.files = event.dataTransfer.files;
+    input.form.requestSubmit();
+  });
+})();
+</script>
 {% endblock %}

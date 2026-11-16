@@ -1,0 +1,31 @@
+{
+  "dagonweb": {
+    "runtime": {
+      "portable_emulation": true
+    }
+  },
+  "host": "localhost",
+  "id": null,
+  "name": "apptainer_example",
+  "tasks": {
+    "apptainer_task": {
+      "command": "echo hello from Apptainer > output.txt",
+      "dagonweb": {
+        "config": {
+          "command": "echo hello from Apptainer > output.txt",
+          "image": "docker://ubuntu:22.04",
+          "inputs": {}
+        },
+        "x": 160,
+        "y": 160
+      },
+      "explicit_prevs": [],
+      "name": "apptainer_task",
+      "nexts": [],
+      "prevs": [],
+      "status": "READY",
+      "type": "apptainer",
+      "working_dir": null
+    }
+  }
+}

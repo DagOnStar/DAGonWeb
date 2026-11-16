@@ -1,0 +1,40 @@
+{
+  "host": "localhost",
+  "id": null,
+  "name": "native_example",
+  "tasks": {
+    "native_task": {
+      "command": "",
+      "dagonweb": {
+        "config": {
+          "callable": "workflow_functions:run",
+          "environment": {},
+          "executor": "local",
+          "inputs": {},
+          "outputs": {
+            "output_file": "result.json"
+          },
+          "python": "",
+          "requirements": "",
+          "resources": {},
+          "source": "import json\nfrom pathlib import Path\n\n\ndef run(output_file: str) -> dict:\n    result = {'message': 'hello from native'}\n    path = Path(output_file)\n    path.parent.mkdir(parents=True, exist_ok=True)\n    path.write_text(json.dumps(result, indent=2), encoding='utf-8')\n    return result\n"
+        },
+        "x": 160,
+        "y": 160
+      },
+      "executor": "local",
+      "explicit_prevs": [],
+      "function": "workflow_functions:run",
+      "inputs": {},
+      "name": "native_task",
+      "nexts": [],
+      "outputs": {
+        "output_file": "result.json"
+      },
+      "prevs": [],
+      "status": "READY",
+      "type": "native",
+      "working_dir": null
+    }
+  }
+}

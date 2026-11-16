@@ -1,0 +1,97 @@
+{
+  "host": "localhost",
+  "id": null,
+  "name": "batch_example",
+  "tasks": {
+    "extract": {
+      "command": "echo hello > data.txt",
+      "dagonweb": {
+        "config": {
+          "command": "echo hello > data.txt",
+          "inputs": {}
+        },
+        "x": 120,
+        "y": 220
+      },
+      "explicit_prevs": [],
+      "name": "extract",
+      "nexts": [
+        "transform_a",
+        "transform_b"
+      ],
+      "prevs": [],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "merge": {
+      "command": "cat workflow:///transform_a/a.txt workflow:///transform_b/b.txt > result.txt",
+      "dagonweb": {
+        "config": {
+          "command": "cat workflow:///transform_a/a.txt workflow:///transform_b/b.txt > result.txt",
+          "inputs": {}
+        },
+        "x": 680,
+        "y": 220
+      },
+      "explicit_prevs": [],
+      "name": "merge",
+      "nexts": [],
+      "prevs": [
+        "transform_a",
+        "transform_b"
+      ],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "transform_a": {
+      "command": "data=workflow:///extract/data.txt ;\ntr a-z A-Z < $data > a.txt",
+      "dagonweb": {
+        "config": {
+          "command": "tr a-z A-Z < $data > a.txt",
+          "inputs": {
+            "data": "workflow:///extract/data.txt"
+          }
+        },
+        "x": 400,
+        "y": 120
+      },
+      "explicit_prevs": [],
+      "name": "transform_a",
+      "nexts": [
+        "merge"
+      ],
+      "prevs": [
+        "extract"
+      ],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "transform_b": {
+      "command": "data=workflow:///extract/data.txt ;\nrev $data > b.txt",
+      "dagonweb": {
+        "config": {
+          "command": "rev $data > b.txt",
+          "inputs": {
+            "data": "workflow:///extract/data.txt"
+          }
+        },
+        "x": 400,
+        "y": 320
+      },
+      "explicit_prevs": [],
+      "name": "transform_b",
+      "nexts": [
+        "merge"
+      ],
+      "prevs": [
+        "extract"
+      ],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    }
+  }
+}

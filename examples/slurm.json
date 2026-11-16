@@ -1,0 +1,32 @@
+{
+  "dagonweb": {
+    "runtime": {
+      "portable_emulation": true
+    }
+  },
+  "host": "localhost",
+  "id": null,
+  "name": "slurm_example",
+  "tasks": {
+    "slurm_task": {
+      "command": "echo hello from Slurm > output.txt",
+      "dagonweb": {
+        "config": {
+          "command": "echo hello from Slurm > output.txt",
+          "inputs": {},
+          "partition": "",
+          "time": "01:00:00"
+        },
+        "x": 160,
+        "y": 160
+      },
+      "explicit_prevs": [],
+      "name": "slurm_task",
+      "nexts": [],
+      "prevs": [],
+      "status": "READY",
+      "type": "slurm",
+      "working_dir": null
+    }
+  }
+}

@@ -1,37 +1,1017 @@
-const root=document.getElementById('editor');const workspace=document.getElementById('workspace');const svg=document.getElementById('links');const inspector=document.querySelector('#inspector .card-body');const editable=root.dataset.editable==='1';let graph={tasks:[],links:[]};let selected=null;let drag=null;let linkDrag=null;
-const defaults={checkpoint:{name:'checkpoint'},batch:{command:'echo hello > output.txt',timeout:3600},slurm:{command:'',partition:'',time_limit:'01:00:00'},cloud:{provider:'',region:'',command:''},docker:{image:'',command:''},native:{callable:'package.module:function',inputs:{},outputs:{output_file:'result.json'},requirements:'',executor:'local',resources:{},python:'',environment:{}},llm:{provider:'openai-compatible',prompt:{messages:[{role:'user',content:'Summarize: {input}'}]},params:{},input_files:{},output_file:'response.json',timeout:120},web:{url:'',method:'GET',query:{},headers:{},outputs:{}}};
-function uid(){return 'task_'+Math.random().toString(36).slice(2,8)}
-async function load(){const r=await fetch(root.dataset.graphUrl);const document=await r.json();const tasks=Object.values(document.tasks).map(t=>({...t,...(t.dagonweb||{}),task_type:t.type,uid:t.name,label:t.name}));graph={...document,tasks,links:[]};syncLinksFromReferences();render()}
-function save(){const tasks={};graph.tasks.forEach(t=>{const name=t.name||t.uid;tasks[name]={name,status:'READY',working_dir:null,nexts:graph.links.filter(l=>l.source_uid===t.uid).map(l=>l.target_uid),prevs:graph.links.filter(l=>l.target_uid===t.uid).map(l=>l.source_uid),command:t.config.command||'',type:t.task_type,dagonweb:{x:t.x,y:t.y,config:t.config}}});const document={tasks,name:graph.name,id:graph.id||0,host:graph.host||'localhost'};return fetch(root.dataset.saveUrl,{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':root.dataset.csrf},body:JSON.stringify(document)}).then(async r=>{const result=await r.json().catch(()=>({}));if(!r.ok)throw new Error(result.error||'Unable to save workflow');return result}).then(load).catch(e=>alert(e.message))}
-function render(){workspace.querySelectorAll('.task-node').forEach(n=>n.remove());graph.tasks.forEach(t=>{const d=document.createElement('div');d.className='task-node'+(selected===t.uid?' selected':'');d.dataset.uid=t.uid;d.style.left=(t.x||100)+'px';d.style.top=(t.y||100)+'px';d.innerHTML=`<button class="connector connector-input" aria-label="Connect input"></button><strong>${escapeHtml(t.label)}</strong><span class="badge text-bg-secondary">${escapeHtml(t.task_type)}</span><div class="small mono">${escapeHtml(t.uid)}</div><button class="connector connector-output" aria-label="Connect output"></button>`;d.addEventListener('mousedown',e=>{if(!editable||e.target.closest('.connector'))return;drag={uid:t.uid,dx:e.offsetX,dy:e.offsetY};});d.addEventListener('click',e=>{if(e.target.closest('.connector'))return;e.stopPropagation();selected=t.uid;showInspector(t);render()});d.querySelector('.connector-output').addEventListener('pointerdown',e=>{if(!editable)return;e.preventDefault();e.stopPropagation();linkDrag={source:t.uid,x:t.x+150,y:t.y+35};drawLinks()});d.querySelector('.connector-input').addEventListener('pointerup',e=>{if(!linkDrag||linkDrag.source===t.uid)return;e.preventDefault();addLink(linkDrag.source,t.uid);linkDrag=null;drawLinks()});workspace.appendChild(d)});drawLinks();if(selected){const t=graph.tasks.find(x=>x.uid===selected);if(t)showInspector(t)}}
-function curve(x1,y1,x2,y2){const bend=Math.max(60,Math.abs(x2-x1)/2);return `M ${x1} ${y1} C ${x1+bend} ${y1}, ${x2-bend} ${y2}, ${x2} ${y2}`}
-function drawLinks(){svg.innerHTML='<defs><marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#495057"/></marker></defs>';graph.links.forEach(l=>{const a=graph.tasks.find(t=>t.uid===l.source_uid),b=graph.tasks.find(t=>t.uid===l.target_uid);if(!a||!b)return;const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('class','link-line');path.setAttribute('d',curve(a.x+150,a.y+35,b.x,b.y+35));svg.appendChild(path)});if(linkDrag){const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('class','link-line link-draft');path.setAttribute('d',curve(linkDrag.x,linkDrag.y,linkDrag.mouseX||linkDrag.x,linkDrag.mouseY||linkDrag.y));svg.appendChild(path)}}
-function addTask(type,label){const name=`${type}_${uid().slice(5)}`;graph.tasks.push({name,uid:name,label:name,task_type:type,x:260+graph.tasks.length*20,y:80+graph.tasks.length*20,config:structuredClone(defaults[type]||{})});selected=graph.tasks.at(-1).uid;render();save()}
-function addLink(source,target){const targetTask=graph.tasks.find(t=>t.uid===target);if(!targetTask||graph.links.some(l=>l.source_uid===source&&l.target_uid===target))return;const inputs=targetTask.config.inputs||{};let input='input';let index=2;while(inputs[input])input=`input_${index++}`;const reference=`workflow:///${source}/output`;targetTask.config={...targetTask.config,inputs:{...inputs,[input]:reference}};graph.links.push({source_uid:source,source_output:'output',target_uid:target,target_input:input,workflow_uri:reference});render();save()}
-function autoLayout(){const names=new Set(graph.tasks.map(t=>t.uid)),incoming=Object.fromEntries([...names].map(name=>[name,0])),nexts=Object.fromEntries([...names].map(name=>[name,[]]));graph.links.forEach(l=>{if(names.has(l.source_uid)&&names.has(l.target_uid)){nexts[l.source_uid].push(l.target_uid);incoming[l.target_uid]++}});const levels={},queue=[...names].filter(name=>!incoming[name]);while(queue.length){const name=queue.shift();nexts[name].forEach(target=>{levels[target]=Math.max(levels[target]||0,(levels[name]||0)+1);if(!--incoming[target])queue.push(target)})}Object.entries(Object.fromEntries([...names].map(name=>[name,levels[name]||0]))).forEach(([name,level])=>{const peers=[...names].filter(other=>(levels[other]||0)===level).sort();const task=graph.tasks.find(t=>t.uid===name);task.x=120+level*260;task.y=100+peers.indexOf(name)*150});render();save()}
-function workflowReferences(value,input='input'){if(typeof value==='string')return [...value.matchAll(/workflow:\/\/([A-Za-z0-9_-]*)\/([A-Za-z0-9_-]+)\/([^\s;]+)/g)].map(match=>({workflow:match[1],source:match[2],output:match[3],input}));if(Array.isArray(value))return value.flatMap(item=>workflowReferences(item,input));if(value&&typeof value==='object')return Object.entries(value).flatMap(([key,item])=>workflowReferences(item,/^[A-Za-z0-9_-]+$/.test(key)?key:input));return []}
-function renameWorkflowReferences(value,oldName,newName){if(typeof value==='string'){const source=oldName.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),workflow=(graph.name||'').replace(/[.*+?^${}()|[\]\\]/g,'\\$&');return value.replace(new RegExp(`workflow:///${source}(?=/)`,'g'),`workflow:///${newName}`).replace(new RegExp(`workflow://${workflow}/${source}(?=/)`,'g'),`workflow://${graph.name}/${newName}`)}if(Array.isArray(value))return value.map(item=>renameWorkflowReferences(item,oldName,newName));if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,renameWorkflowReferences(item,oldName,newName)]));return value}
-function taskWorkflowReferences(task){const config={...(task.config||{})};if(task.task_type==='native')delete config.source;return workflowReferences(config)}
-function syncLinksFromReferences(){const links=[];const keys=new Set();graph.tasks.forEach(target=>taskWorkflowReferences(target).forEach(reference=>{const local=!reference.workflow||reference.workflow===graph.name,key=`${reference.source}|${reference.output}|${target.uid}|${reference.input}`;if(local&&reference.source!==target.uid&&graph.tasks.some(task=>task.uid===reference.source)&&!keys.has(key)){keys.add(key);links.push({source_uid:reference.source,source_output:reference.output,target_uid:target.uid,target_input:reference.input,workflow_uri:reference.workflow?`workflow://${reference.workflow}/${reference.source}/${reference.output}`:`workflow:///${reference.source}/${reference.output}`})}}));graph.links=links}
-function field(label,name,value,type='text'){return `<div class="mb-2"><label class="form-label" for="cfg_${name}">${label}</label><input id="cfg_${name}" class="form-control" type="${type}" value="${escapeAttr(value??'')}" ${editable?'':'disabled'}></div>`}
-function select(label,name,value,options){return `<div class="mb-2"><label class="form-label" for="cfg_${name}">${label}</label><select id="cfg_${name}" class="form-select" ${editable?'':'disabled'}>${options.map(option=>`<option value="${escapeAttr(option)}" ${option===value?'selected':''}>${escapeHtml(option)}</option>`).join('')}</select></div>`}
-function area(label,name,value){return `<div class="mb-2"><label class="form-label" for="cfg_${name}">${label}</label><textarea id="cfg_${name}" class="form-control mono" rows="${name==='script'||name==='command'||name==='prompt'||name==='value'?8:4}" ${editable?'':'disabled'}>${escapeHtml(value??'')}</textarea></div>`}
-function batchEditor(command){return `<div class="mb-2"><label class="form-label" for="cfg_command">Batch script</label><div class="btn-group btn-group-sm mb-1"><button type="button" id="formatCommand" class="btn btn-outline-secondary">Beautify</button><button type="button" id="newlineCommand" class="btn btn-outline-secondary">New line</button></div><textarea id="cfg_command" class="form-control mono" rows="10" spellcheck="false" ${editable?'':'disabled'}>${escapeHtml(command||'')}</textarea><pre id="commandHighlight" class="batch-highlight mono mt-2 mb-0"></pre><div class="form-text">Press Enter to finish the current statement with <code>;</code>.</div></div>`}
-function llmPromptText(c){const prompt=c.prompt;if(prompt&&typeof prompt==='object')return JSON.stringify(prompt,null,2);if(typeof prompt==='string'&&prompt.trim().startsWith('{'))return prompt;return JSON.stringify({messages:[{role:'user',content:prompt||''}],...(c.model?{model:c.model}:{})},null,2)}
-function llmEditor(c){const inputFiles=c.input_files||c.inputs||{};return `<div class="alert alert-info small mb-3"><strong>OpenAI-compatible Chat Completions request</strong><br>Provider credentials belong in the runtime <code>[llm.${escapeHtml(c.provider||'provider')}]</code> configuration, never here. The complete provider response is saved as JSON for downstream tasks.</div>`+field('Provider','provider',c.provider||'')+`<div class="mb-2"><label class="form-label" for="cfg_prompt">Request JSON</label><textarea id="cfg_prompt" class="form-control mono" rows="12" ${editable?'':'disabled'}>${escapeHtml(llmPromptText(c))}</textarea><div class="form-text">Must be a JSON object with a <code>messages</code> array. Put <code>model</code> and options such as <code>temperature</code> in this request.</div></div>`+area('Prompt parameters (name = text)','params',objectLines(c.params))+area('Staged workflow inputs (placeholder = workflow:///task/path)','input_files',objectLines(inputFiles))+field('Response file','output_file',c.output_file||'response.json')+field('Timeout (seconds)','timeout',c.timeout??120,'number')+`<p class="form-text mb-0">Use <code>{name}</code> in any request string for a parameter or staged input. Literal braces must be <code>{{</code> and <code>}}</code>. Inline <code>workflow:///…</code> references are also supported.</p>`}
-function configFields(t){const c=t.config||{},inputs=area('Workflow inputs (one name = value per line)','inputs',objectLines(c.inputs));if(t.task_type==='checkpoint')return field('Checkpoint name','name',c.name||'checkpoint')+inputs;if(t.task_type==='batch')return batchEditor(c.command)+field('Timeout (seconds)','timeout',c.timeout??3600,'number')+inputs;if(t.task_type==='slurm')return area('Command','command',c.command||'')+field('Partition','partition',c.partition||'')+field('Time limit','time_limit',c.time_limit||'')+inputs;if(t.task_type==='cloud')return field('Provider','provider',c.provider||'')+field('Region','region',c.region||'')+area('Command','command',c.command||'')+inputs;if(t.task_type==='docker')return field('Image','image',c.image||'')+area('Command','command',c.command||'')+inputs;if(t.task_type==='native')return field('Callable','callable',c.callable||'')+inputs+area('Output mappings (one name = value per line)','outputs',objectLines(c.outputs));if(t.task_type==='llm')return llmEditor(c);if(t.task_type==='web')return `<p class="form-text">HTTP(S) request configuration. Use one request body encoding; multipart, form, and authentication options are available in Advanced configuration JSON.</p>`+field('URL','url',c.url||'','url')+select('Method','method',c.method||'GET',['GET','POST','PUT','PATCH','DELETE','HEAD'])+area('Query parameters (one name = value per line)','query',objectLines(c.query))+area('Request headers (one name = value per line)','headers',objectLines(c.headers))+area('JSON request body','json',c.json===undefined?(c.body||''):JSON.stringify(c.json,null,2))+field('Expected status (for example: 200 or [200, 201])','expected_status',c.expected_status??'')+field('Timeout (seconds)','timeout',c.timeout??'','number')+field('Retries','retries',c.retries??0,'number')+area('Response outputs (body, headers, or metadata = relative path)','outputs',objectLines(c.outputs))+inputs;return ''}
-function objectLines(value){return Object.entries(value||{}).map(([k,v])=>`${k} = ${v}`).join('\n')}
-function parseLines(value){const result={};for(const line of value.split('\n').map(x=>x.trim()).filter(Boolean)){const i=line.indexOf('=');if(i<1)throw new Error('Mappings must use name = value');result[line.slice(0,i).trim()]=line.slice(i+1).trim()}return result}
-function readConfig(t){const get=n=>document.getElementById(`cfg_${n}`).value;const n=v=>{const value=Number(v);if(!Number.isFinite(value)||value<=0)throw new Error('Timeout must be a positive number');return value};const inputs={inputs:parseLines(get('inputs'))};if(t.task_type==='checkpoint')return {name:get('name'),...inputs};if(t.task_type==='batch')return {command:get('command'),timeout:n(get('timeout')),...inputs};if(t.task_type==='slurm')return {command:get('command'),partition:get('partition'),time_limit:get('time_limit'),...inputs};if(t.task_type==='cloud')return {provider:get('provider'),region:get('region'),command:get('command'),...inputs};if(t.task_type==='docker')return {image:get('image'),command:get('command'),...inputs};if(t.task_type==='native')return {callable:get('callable'),...inputs,outputs:parseLines(get('outputs'))};if(t.task_type==='llm'){let prompt;try{prompt=JSON.parse(get('prompt'))}catch{throw new Error('LLM request must be valid JSON')}if(!prompt||Array.isArray(prompt)||typeof prompt!=='object'||!Array.isArray(prompt.messages))throw new Error('LLM request must be an object containing a messages array');const outputFile=get('output_file').trim();if(!outputFile||outputFile.startsWith('/')||outputFile.split('/').includes('..'))throw new Error('Response file must be a non-empty relative path without ..');return {provider:get('provider').trim(),prompt,params:parseLines(get('params')),input_files:parseLines(get('input_files')),output_file:outputFile,timeout:n(get('timeout'))}}if(t.task_type==='web'){const config={...t.config,url:get('url'),method:get('method'),query:parseLines(get('query')),headers:parseLines(get('headers')),outputs:parseLines(get('outputs')),...inputs},json=get('json').trim(),expected=get('expected_status').trim(),timeout=get('timeout').trim(),retries=get('retries').trim();delete config.body;delete config.json;delete config.expected_status;delete config.timeout;delete config.retries;if(json){try{config.json=JSON.parse(json)}catch{throw new Error('JSON request body must be valid JSON')}}if(expected){try{const status=JSON.parse(expected);if(!(Number.isInteger(status)||(Array.isArray(status)&&status.every(Number.isInteger))))throw new Error();config.expected_status=status}catch{throw new Error('Expected status must be an integer or JSON list of integers')}}if(timeout){const value=Number(timeout);if(!Number.isFinite(value)||value<=0)throw new Error('Timeout must be a positive number');config.timeout=value}if(retries){const value=Number(retries);if(!Number.isInteger(value)||value<0)throw new Error('Retries must be a non-negative integer');config.retries=value}return config}return {}}
-function nativeEditor(c){return `<div class="alert alert-info small mb-3"><strong>Importable Python function</strong><br>Use <code>module:function</code>. Local-file and <code>workflow:///task/path</code> inputs are staged as file paths; other values are passed as scalars. Declared outputs live below <code>outputs/</code>. Embedded source is materialized in the configured scratch root for <strong>local</strong> execution; Slurm nodes need the module installed separately.</div>`+field('Callable','callable',c.callable||'')+`<div class="mb-2"><label class="form-label" for="cfg_source">Python function source</label><textarea id="cfg_source" class="form-control mono" rows="14" ${editable?'':'disabled'}>${escapeHtml(c.source||'')}</textarea><div class="form-text">Define the callable as a module-level <code>def</code>; Ace checks Python syntax while you edit.</div></div>`+area('requirements.txt (local executor only; installed for this Native task)','requirements',c.requirements||'')+area('Function inputs (name = scalar, local file, or workflow:///task/path)','inputs',objectLines(c.inputs))+area('Declared outputs (parameter = relative output path)','outputs',objectLines(c.outputs))+select('Executor','executor',c.executor||'local',['local','slurm'])+area('Scheduler resources (name = value per line)','resources',objectLines(c.resources))+field('Python interpreter (optional)','python',c.python||'')+area('Environment variables (name = value per line; do not put secrets here)','environment',objectLines(c.environment))}
-const standardConfigFields=configFields;configFields=t=>t.task_type==='native'?nativeEditor(t.config||{}):standardConfigFields(t);
-const standardReadConfig=readConfig;readConfig=t=>{if(t.task_type!=='native')return standardReadConfig(t);const get=name=>document.getElementById(`cfg_${name}`).value,outputs=parseLines(get('outputs')),source=get('source'),requirements=get('requirements');let callable=get('callable').trim();if(callable==='package.module:function'&&source.trim()){const match=source.match(/^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/m);if(match)callable=`workflow_functions.${t.uid}:${match[1]}`}if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(callable.split(':').at(-1)||'')||!callable.includes(':')||callable==='package.module:function')throw new Error('Set Callable to the importable module:function name for this task.');if(source.trim()&&source.length>250000)throw new Error('Native source must be 250 KB or smaller');if(requirements.includes('\0')||requirements.length>50000)throw new Error('requirements.txt must be at most 50 KB and contain no NUL characters');Object.entries(outputs).forEach(([name,path])=>{if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)||!path||path.startsWith('/')||path.split('/').includes('..'))throw new Error('Native outputs need a parameter name and a safe relative path')});return {callable,source,requirements,inputs:parseLines(get('inputs')),outputs,executor:get('executor'),resources:parseLines(get('resources')),python:get('python').trim(),environment:parseLines(get('environment'))}};
-function highlightBatch(script){return escapeHtml(script).replace(/(workflow:\/\/\/[^\s]+)/g,'<span class="text-info">$1</span>').replace(/(^|[;\n]\s*)(echo|cat|mkdir|cd|if|then|fi|for|in|do|done)\b/g,'$1<span class="text-warning">$2</span>').replace(/(#.*)$/gm,'<span class="text-success">$1</span>')}
-function setupBatchEditor(){const editor=document.getElementById('cfg_command');if(!editor)return;const preview=document.getElementById('commandHighlight');const update=()=>preview.innerHTML=highlightBatch(editor.value);const newline=()=>{const start=editor.selectionStart,end=editor.selectionEnd,line=editor.value.slice(0,start).split('\n').at(-1).trim();const suffix=line&&!/[;{]$/.test(line)?';\n':'\n';editor.setRangeText(suffix,start,end,'end');update();editor.focus()};editor.addEventListener('input',update);editor.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();newline()}});document.getElementById('newlineCommand').onclick=newline;document.getElementById('formatCommand').onclick=()=>{editor.value=editor.value.split(/;\s*|\n/).map(line=>line.trim()).filter(Boolean).map(line=>line.endsWith(';')?line:line+';').join('\n');update()};update()}
-function showInspector(t){const advanced=`<details class="mt-3"><summary>Advanced configuration JSON</summary><textarea id="iConfig" class="form-control mono mt-2" rows="8" ${editable?'':'disabled'}>${escapeHtml(JSON.stringify(t.config||{},null,2))}</textarea></details>`;const links=graph.links.filter(l=>l.target_uid===t.uid||l.source_uid===t.uid);inspector.innerHTML=`<div class="mb-2"><label class="form-label" for="iLabel">Task name</label><input id="iLabel" class="form-control" value="${escapeAttr(t.name)}" ${editable?'':'disabled'}></div><h6>Configuration</h6>${configFields(t)}${advanced}<h6 class="mt-3">Links</h6><ul>${links.map(l=>`<li><code>${escapeHtml(l.source_uid)}</code> → <code>${escapeHtml(l.target_uid)}</code></li>`).join('')}</ul><button id="applyInspector" class="btn btn-primary btn-sm" ${editable?'':'disabled'}>Apply</button> <button id="deleteTask" class="btn btn-outline-danger btn-sm" ${editable?'':'disabled'}>Delete</button>`;document.getElementById('applyInspector').onclick=()=>{try{const oldName=t.uid;const name=document.getElementById('iLabel').value;if(!/^[A-Za-z0-9_-]{1,80}$/.test(name))throw new Error('Task names may contain only letters, numbers, underscores, and hyphens');if(graph.tasks.some(other=>other!==t&&other.uid===name))throw new Error('Task names must be unique');t.config=document.querySelector('details[open] #iConfig')?JSON.parse(document.getElementById('iConfig').value):readConfig(t);if(oldName!==name){graph.tasks.forEach(task=>{task.config=renameWorkflowReferences(task.config||{},oldName,name)});t.name=name;t.uid=name;t.label=name;graph.links.forEach(l=>{if(l.source_uid===oldName)l.source_uid=name;if(l.target_uid===oldName)l.target_uid=name})}syncLinksFromReferences();selected=name;render();save()}catch(e){alert(e.message)}};document.getElementById('deleteTask').onclick=()=>{graph.tasks=graph.tasks.filter(x=>x.uid!==t.uid);graph.links=graph.links.filter(l=>l.source_uid!==t.uid&&l.target_uid!==t.uid);selected=null;render();inspector.innerHTML='<p class="text-muted">Select a task.</p>';save()}}
-document.querySelectorAll('#palette [data-type]').forEach(b=>b.addEventListener('click',()=>{if(editable)addTask(b.dataset.type,b.dataset.label)}));document.getElementById('autoLayout').addEventListener('click',autoLayout);document.addEventListener('mousemove',e=>{const rect=workspace.getBoundingClientRect();if(linkDrag){linkDrag.mouseX=e.clientX-rect.left+workspace.scrollLeft;linkDrag.mouseY=e.clientY-rect.top+workspace.scrollTop;drawLinks()}if(!drag)return;const t=graph.tasks.find(x=>x.uid===drag.uid);t.x=Math.max(0,e.clientX-rect.left+workspace.scrollLeft-drag.dx);t.y=Math.max(0,e.clientY-rect.top+workspace.scrollTop-drag.dy);render()});document.addEventListener('mouseup',()=>{const moved=Boolean(drag);drag=null;if(linkDrag){linkDrag=null;drawLinks()}if(moved)save()});workspace.addEventListener('click',()=>{selected=null;render();inspector.innerHTML='<p class="text-muted">Select a task.</p>'});const inspectorResizer=document.getElementById('inspectorResizer'),toggleInspectorFull=document.getElementById('toggleInspectorFull');function setInspectorExpanded(expanded){root.classList.toggle('inspector-expanded',expanded);toggleInspectorFull.textContent=expanded?'Standard':'Expand';toggleInspectorFull.title=expanded?'Restore standard Inspector width':'Expand Inspector';toggleInspectorFull.setAttribute('aria-pressed',String(expanded))}function setInspectorWidth(width){setInspectorExpanded(false);const bounds=root.getBoundingClientRect(),max=Math.min(600,Math.max(260,bounds.width-230-320-32)),value=Math.max(260,Math.min(max,width));root.style.setProperty('--inspector-width',`${value}px`);inspectorResizer.setAttribute('aria-valuemax',String(max));inspectorResizer.setAttribute('aria-valuenow',String(value))}toggleInspectorFull.addEventListener('click',()=>{if(root.classList.contains('inspector-expanded')){setInspectorExpanded(false);setInspectorWidth(330)}else setInspectorExpanded(true)});inspectorResizer.addEventListener('pointerdown',event=>{event.preventDefault();inspectorResizer.setPointerCapture(event.pointerId);const move=moveEvent=>setInspectorWidth(root.getBoundingClientRect().right-moveEvent.clientX);const up=upEvent=>{inspectorResizer.releasePointerCapture(upEvent.pointerId);inspectorResizer.removeEventListener('pointermove',move);inspectorResizer.removeEventListener('pointerup',up)};inspectorResizer.addEventListener('pointermove',move);inspectorResizer.addEventListener('pointerup',up)});inspectorResizer.addEventListener('keydown',event=>{if(event.key!=='ArrowLeft'&&event.key!=='ArrowRight')return;event.preventDefault();const current=parseFloat(getComputedStyle(root).getPropertyValue('--inspector-width'))||330;setInspectorWidth(current+(event.key==='ArrowLeft'?20:-20))});function escapeHtml(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}function escapeAttr(s){return escapeHtml(s).replace(/"/g,'&quot;')}load();
-document.addEventListener('focusin',event=>{if(event.target.id==='cfg_command'){setupBatchEditor();upgradeBatchEditor()}});
-new MutationObserver(()=>{if(document.getElementById('cfg_command')){setupBatchEditor();upgradeBatchEditor();document.getElementById('formatCommand')?.click()}upgradeNativeEditor()}).observe(inspector,{childList:true});
-function upgradeNativeEditor(){const textarea=document.getElementById('cfg_source');if(!textarea||!window.ace||textarea.dataset.aceReady)return;textarea.dataset.aceReady='1';const host=document.createElement('div');host.id='nativeAceEditor';host.className='native-ace-editor';textarea.after(host);textarea.hidden=true;const aceEditor=window.ace.edit(host);aceEditor.setTheme('ace/theme/github_dark');aceEditor.session.setMode('ace/mode/python');aceEditor.setValue(textarea.value,-1);aceEditor.setOptions({fontSize:'13px',showPrintMargin:false,wrap:true,tabSize:4,useSoftTabs:true});aceEditor.session.on('change',()=>{textarea.value=aceEditor.getValue();textarea.dispatchEvent(new Event('input'))})}
-function upgradeBatchEditor(){const textarea=document.getElementById('cfg_command');if(!textarea||!window.ace||textarea.dataset.aceReady)return;textarea.dataset.aceReady='1';const host=document.createElement('div');host.id='batchAceEditor';host.className='batch-ace-editor';textarea.after(host);textarea.hidden=true;const aceEditor=window.ace.edit(host);aceEditor.setTheme('ace/theme/github_dark');aceEditor.session.setMode('ace/mode/sh');aceEditor.setValue(textarea.value,-1);aceEditor.setOptions({fontSize:'13px',showPrintMargin:false,wrap:true});const sync=()=>{textarea.value=aceEditor.getValue();textarea.dispatchEvent(new Event('input'))};aceEditor.session.on('change',sync);aceEditor.commands.addCommand({name:'semicolonNewline',bindKey:{win:'Enter',mac:'Enter'},exec:editor=>{const line=editor.session.getLine(editor.getCursorPosition().row).trim();editor.insert(line&&!/[;{]$/.test(line)?';\n':'\n')}});const format=document.getElementById('formatCommand');if(format)format.onclick=()=>{const formatted=aceEditor.getValue().split(/;\s*|\n/).map(line=>line.trim()).filter(Boolean).map(line=>line.endsWith(';')?line:line+';').join('\n');aceEditor.setValue(formatted,-1);sync()};const newline=document.getElementById('newlineCommand');if(newline)newline.onclick=()=>aceEditor.execCommand('semicolonNewline')}
-workspace.addEventListener('click',event=>{const node=event.target.closest('.task-node');const aceHost=document.getElementById('batchAceEditor');if(!node||!aceHost||!window.ace)return;const aceEditor=window.ace.edit(aceHost);if(!aceEditor.isFocused())return;const task=graph.tasks.find(item=>item.uid===node.dataset.uid);if(!task)return;event.preventDefault();event.stopImmediatePropagation();aceEditor.insert(`workflow:///${task.name}/output`);aceEditor.focus()},true);
+/* DAGonWeb visual workflow editor.
+ *
+ * Plain browser JavaScript, no build step. The task-type registry comes from
+ * the server (app/task_specs.py) as JSON, so palette entries and inspector
+ * forms always match what the executor hands to DAGonStar.
+ *
+ * Data links are never stored on their own: they are derived from the
+ * workflow:/// references inside each task configuration, exactly like
+ * DAGonStar does. Explicit (ordering-only) dependencies are stored per task
+ * as DAGonStar `explicit_prevs`.
+ */
+(() => {
+  'use strict';
+
+  const root = document.getElementById('editor');
+  if (!root) return;
+  const workspace = document.getElementById('workspace');
+  const canvas = document.getElementById('canvas');
+  const svg = document.getElementById('links');
+  const inspector = document.getElementById('inspectorBody');
+  const statusEl = document.getElementById('saveStatus');
+  const emptyHint = document.getElementById('canvasEmpty');
+  const editable = root.dataset.editable === '1';
+
+  const SPEC_GROUPS = JSON.parse(document.getElementById('taskSpecs').textContent);
+  const SPECS = Object.fromEntries(SPEC_GROUPS.flatMap(group => group.types).map(spec => [spec.type, spec]));
+  const NAME_RE = /^[A-Za-z0-9_-]{1,80}$/;
+  const INPUT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  const PATH_RE = /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)*$/;
+  // Mirrors app.task_specs.WORKFLOW_REFERENCE.
+  const REFERENCE_RE = /workflow:\/\/([A-Za-z0-9_-]{0,80})\/([A-Za-z0-9_-]{1,80})\/([^\s;|&<>()]+)/g;
+  const NODE_WIDTH = 180;
+  const COMMAND_TYPES = new Set(['batch', 'slurm', 'checkpoint', 'cloud', 'docker', 'kubernetes', 'apptainer', 'nomad']);
+  // Where a new data link stores its reference, per target task type.
+  const INPUT_FIELD = { llm: 'input_files', web: null };
+
+  let graph = { name: '', id: 0, tasks: [], links: [] };
+  let selected = null;
+  let drag = null;
+  let linkDrag = null;
+  let zoom = 1;
+  let saveTimer = null;
+  let saving = Promise.resolve();
+  let aceEditors = [];
+
+  // ------------------------------------------------------------------ utils
+  const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const clone = value => JSON.parse(JSON.stringify(value ?? {}));
+  const findTask = name => graph.tasks.find(task => task.name === name);
+  const specOf = task => SPECS[task.task_type] || { label: task.task_type, icon: '?', category: 'shell', fields: [] };
+
+  function setStatus(text, state = '') {
+    statusEl.textContent = text;
+    statusEl.className = `editor-status ${state}`;
+  }
+
+  function references(value, input = 'input') {
+    if (typeof value === 'string') {
+      return [...value.matchAll(REFERENCE_RE)].map(match => ({ workflow: match[1], source: match[2], path: match[3], input }));
+    }
+    if (Array.isArray(value)) return value.flatMap(item => references(item, input));
+    if (value && typeof value === 'object') {
+      return Object.entries(value).flatMap(([key, item]) => references(item, /^[A-Za-z0-9_-]+$/.test(key) ? key : input));
+    }
+    return [];
+  }
+
+  function taskReferences(task) {
+    const config = { ...(task.config || {}) };
+    if (task.task_type === 'native') delete config.source;
+    return references(config).filter(ref => !ref.workflow || ref.workflow === graph.name);
+  }
+
+  function deriveLinks() {
+    const links = [];
+    const seen = new Set();
+    graph.tasks.forEach(target => {
+      taskReferences(target).forEach(ref => {
+        const key = `${ref.source}|${target.name}`;
+        if (ref.source === target.name || seen.has(key)) return;
+        seen.add(key);
+        links.push({ kind: 'data', source: ref.source, target: target.name, path: ref.path, input: ref.input, missing: !findTask(ref.source) });
+      });
+      (target.explicit_prevs || []).forEach(source => {
+        const key = `${source}|${target.name}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        links.push({ kind: 'explicit', source, target: target.name, missing: !findTask(source) });
+      });
+    });
+    graph.links = links;
+  }
+
+  /** Files a task is known to produce, used for reference suggestions. */
+  function producedFiles(task) {
+    const config = task.config || {};
+    const files = new Set();
+    const addValues = (mapping, prefix = '') => Object.values(mapping || {}).forEach(value => {
+      if (typeof value === 'string' && PATH_RE.test(value)) files.add(value.startsWith('outputs/') || !prefix ? value : `${prefix}${value}`);
+    });
+    if (task.task_type === 'native' || task.task_type === 'faas') addValues(config.outputs, 'outputs/');
+    if (['iot', 'agentic', 'web'].includes(task.task_type)) addValues(config.outputs);
+    if (task.task_type === 'llm' && config.output_file) files.add(config.output_file);
+    if (COMMAND_TYPES.has(task.task_type)) {
+      for (const match of String(config.command || '').matchAll(/>{1,2}\s*([A-Za-z0-9_.\/-]+)/g)) {
+        if (PATH_RE.test(match[1])) files.add(match[1]);
+      }
+    }
+    graph.links.filter(link => link.source === task.name && link.path).forEach(link => files.add(link.path));
+    return [...files];
+  }
+
+  // ------------------------------------------------------------------ load/save
+  async function load() {
+    const response = await fetch(root.dataset.graphUrl, { headers: { Accept: 'application/json' } });
+    if (!response.ok) {
+      setStatus('Unable to load the workflow', 'error');
+      return;
+    }
+    fromDocument(await response.json());
+    setStatus(editable ? 'All changes saved' : 'Read only', editable ? 'saved' : '');
+    render();
+    showEmptyInspector();
+    if (graph.tasks.length) requestAnimationFrame(() => fit(false));
+  }
+
+  function fromDocument(document) {
+    graph = {
+      name: document.name,
+      id: document.id,
+      host: document.host || 'localhost',
+      pre_stage: document.pre_stage,
+      dagonweb: document.dagonweb,
+      tasks: Object.values(document.tasks || {}).map(task => ({
+        name: task.name,
+        task_type: task.type,
+        x: task.dagonweb?.x ?? 100,
+        y: task.dagonweb?.y ?? 100,
+        config: task.dagonweb?.config ?? {},
+        explicit_prevs: [...(task.explicit_prevs || [])],
+      })),
+      links: [],
+    };
+    deriveLinks();
+  }
+
+  function toDocument() {
+    const tasks = {};
+    graph.tasks.forEach(task => {
+      tasks[task.name] = {
+        name: task.name,
+        type: task.task_type,
+        command: '',
+        explicit_prevs: (task.explicit_prevs || []).filter(name => findTask(name)),
+        dagonweb: { x: Math.round(task.x), y: Math.round(task.y), config: task.config },
+      };
+    });
+    const document = { tasks, name: graph.name, id: graph.id, host: graph.host };
+    if (graph.pre_stage) document.pre_stage = graph.pre_stage;
+    if (graph.dagonweb) document.dagonweb = graph.dagonweb;
+    return document;
+  }
+
+  function scheduleSave(delay = 400) {
+    if (!editable) return;
+    clearTimeout(saveTimer);
+    setStatus('Unsaved changes…', 'saving');
+    saveTimer = setTimeout(save, delay);
+  }
+
+  function save() {
+    clearTimeout(saveTimer);
+    if (!editable) return Promise.resolve();
+    const body = JSON.stringify(toDocument());
+    saving = saving.then(async () => {
+      setStatus('Saving…', 'saving');
+      try {
+        const response = await fetch(root.dataset.saveUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': root.dataset.csrf },
+          body,
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `Save failed (HTTP ${response.status})`);
+        setStatus(`Saved ${new Date().toLocaleTimeString()}`, 'saved');
+        return true;
+      } catch (error) {
+        setStatus(`Not saved: ${error.message}`, 'error');
+        return false;
+      }
+    });
+    return saving;
+  }
+
+  // ------------------------------------------------------------------ rendering
+  function render() {
+    canvas.querySelectorAll('.task-node').forEach(node => node.remove());
+    const missing = new Set(graph.links.filter(link => link.missing).map(link => link.target));
+    graph.tasks.forEach(task => canvas.appendChild(renderNode(task, missing.has(task.name))));
+    emptyHint.hidden = graph.tasks.length > 0;
+    resizeCanvas();
+    drawLinks();
+  }
+
+  function renderNode(task, hasMissing) {
+    const spec = specOf(task);
+    const node = document.createElement('div');
+    node.className = `task-node cat-${spec.category}${selected === task.name ? ' selected' : ''}`;
+    node.dataset.name = task.name;
+    node.tabIndex = 0;
+    node.setAttribute('role', 'button');
+    node.setAttribute('aria-label', `${task.name}, ${spec.label} task`);
+    node.style.left = `${task.x}px`;
+    node.style.top = `${task.y}px`;
+    node.innerHTML = `
+      <button class="connector connector-input" type="button" aria-label="Connect into ${escapeHtml(task.name)}" tabindex="-1"></button>
+      <div class="node-head"><span class="type-icon" aria-hidden="true">${escapeHtml(spec.icon)}</span>
+        <div class="min-w-0"><div class="node-title">${escapeHtml(task.name)}</div><div class="node-type">${escapeHtml(spec.label)}</div></div></div>
+      ${hasMissing ? '<div class="node-warning">⚠ references a missing task</div>' : ''}
+      <button class="connector connector-output" type="button" aria-label="Connect from ${escapeHtml(task.name)}" tabindex="-1"></button>`;
+
+    node.addEventListener('pointerdown', event => {
+      if (event.button !== 0 || event.target.closest('.connector')) return;
+      select(task.name);
+      if (!editable) return;
+      const point = canvasPoint(event);
+      drag = { name: task.name, dx: point.x - task.x, dy: point.y - task.y, moved: false };
+    });
+    node.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(task.name); }
+    });
+    node.querySelector('.connector-output').addEventListener('pointerdown', event => {
+      if (!editable) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const anchor = outputAnchor(task);
+      linkDrag = { source: task.name, x: anchor.x, y: anchor.y, mx: anchor.x, my: anchor.y };
+      workspace.classList.add('workspace-linking');
+      drawLinks();
+    });
+    return node;
+  }
+
+  function nodeHeight(name) {
+    const node = canvas.querySelector(`.task-node[data-name="${CSS.escape(name)}"]`);
+    return node ? node.offsetHeight : 56;
+  }
+  const outputAnchor = task => ({ x: task.x + NODE_WIDTH, y: task.y + nodeHeight(task.name) / 2 });
+  const inputAnchor = task => ({ x: task.x, y: task.y + nodeHeight(task.name) / 2 });
+
+  function curve(a, b) {
+    const bend = Math.max(50, Math.abs(b.x - a.x) / 2);
+    return `M ${a.x} ${a.y} C ${a.x + bend} ${a.y}, ${b.x - bend} ${b.y}, ${b.x} ${b.y}`;
+  }
+
+  function resizeCanvas() {
+    const width = Math.max(workspace.clientWidth / zoom, ...graph.tasks.map(task => task.x + NODE_WIDTH + 240));
+    const height = Math.max(workspace.clientHeight / zoom, ...graph.tasks.map(task => task.y + 200));
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    canvas.style.transform = `scale(${zoom})`;
+    svg.setAttribute('width', width);
+    svg.setAttribute('height', height);
+    document.getElementById('zoomLabel').textContent = `${Math.round(zoom * 100)}%`;
+  }
+
+  function drawLinks() {
+    const ns = 'http://www.w3.org/2000/svg';
+    svg.innerHTML = `<defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--dw-link)"/></marker>
+      <marker id="arrowExplicit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--dw-link-explicit)"/></marker></defs>`;
+    graph.links.forEach(link => {
+      const a = findTask(link.source);
+      const b = findTask(link.target);
+      if (!a || !b) return;
+      const d = curve(outputAnchor(a), inputAnchor(b));
+      const group = document.createElementNS(ns, 'g');
+      const hit = document.createElementNS(ns, 'path');
+      hit.setAttribute('class', 'link-hit');
+      hit.setAttribute('d', d);
+      const title = document.createElementNS(ns, 'title');
+      title.textContent = link.kind === 'explicit'
+        ? `${link.source} → ${link.target} (explicit dependency). Click to remove.`
+        : `${link.target}.${link.input} ← workflow:///${link.source}/${link.path}. Click to remove.`;
+      hit.appendChild(title);
+      if (editable) hit.addEventListener('click', event => { event.stopPropagation(); removeLink(link); });
+      const path = document.createElementNS(ns, 'path');
+      path.setAttribute('class', `link-line ${link.kind === 'explicit' ? 'explicit' : ''} ${selected && (link.source === selected || link.target === selected) ? 'highlight' : ''}`);
+      path.setAttribute('d', d);
+      path.setAttribute('marker-end', `url(#${link.kind === 'explicit' ? 'arrowExplicit' : 'arrow'})`);
+      group.append(hit, path);
+      svg.appendChild(group);
+    });
+    if (linkDrag) {
+      const draft = document.createElementNS(ns, 'path');
+      draft.setAttribute('class', 'link-line draft');
+      draft.setAttribute('d', curve({ x: linkDrag.x, y: linkDrag.y }, { x: linkDrag.mx, y: linkDrag.my }));
+      svg.appendChild(draft);
+    }
+  }
+
+  // ------------------------------------------------------------------ geometry & zoom
+  function canvasPoint(event) {
+    const rect = canvas.getBoundingClientRect();
+    return { x: (event.clientX - rect.left) / zoom, y: (event.clientY - rect.top) / zoom };
+  }
+
+  function setZoom(value) {
+    zoom = Math.min(2, Math.max(0.3, Math.round(value * 100) / 100));
+    resizeCanvas();
+    drawLinks();
+  }
+
+  function fit(allowGrow = true) {
+    if (!graph.tasks.length) return setZoom(1);
+    const maxX = Math.max(...graph.tasks.map(task => task.x + NODE_WIDTH)) + 60;
+    const maxY = Math.max(...graph.tasks.map(task => task.y + 80)) + 60;
+    const scale = Math.min(workspace.clientWidth / maxX, workspace.clientHeight / maxY);
+    setZoom(allowGrow ? Math.min(scale, 1.25) : Math.min(scale, 1));
+  }
+
+  // ------------------------------------------------------------------ graph edits
+  function uniqueName(base) {
+    const stem = (base || 'task').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 70) || 'task';
+    let name = stem;
+    let index = 2;
+    while (findTask(name)) name = `${stem}_${index++}`;
+    return name;
+  }
+
+  function addTask(type, position) {
+    const spec = SPECS[type];
+    if (!spec || !editable) return;
+    const name = uniqueName(spec.default_name);
+    const config = clone(spec.default_config);
+    if (type === 'native' && config.callable === 'workflow_functions:run') config.callable = `workflow_functions.${name}:run`;
+    const center = position || {
+      x: (workspace.scrollLeft + workspace.clientWidth / 2) / zoom - NODE_WIDTH / 2,
+      y: (workspace.scrollTop + workspace.clientHeight / 2) / zoom - 30,
+    };
+    graph.tasks.push({ name, task_type: type, x: Math.max(10, Math.round(center.x)), y: Math.max(10, Math.round(center.y)), config, explicit_prevs: [] });
+    deriveLinks();
+    select(name);
+    scheduleSave(0);
+  }
+
+  function referenceField(task) {
+    if (task.task_type in INPUT_FIELD) return INPUT_FIELD[task.task_type];
+    return 'inputs';
+  }
+
+  function addDataLink(source, target, path, input) {
+    const field = referenceField(target);
+    const reference = `workflow:///${source.name}/${path}`;
+    const container = target.config[field] && typeof target.config[field] === 'object' && !Array.isArray(target.config[field]) ? target.config[field] : {};
+    target.config = { ...target.config, [field]: { ...container, [input]: reference } };
+  }
+
+  function removeLink(link) {
+    const target = findTask(link.target);
+    if (!target) return;
+    if (link.kind === 'explicit') {
+      if (!confirm(`Remove the explicit dependency ${link.source} → ${link.target}?`)) return;
+      target.explicit_prevs = (target.explicit_prevs || []).filter(name => name !== link.source);
+    } else {
+      const prefix = `workflow:///${link.source}/`;
+      const field = referenceField(target);
+      const mapping = field ? target.config[field] : null;
+      const keys = mapping && typeof mapping === 'object' ? Object.keys(mapping).filter(key => typeof mapping[key] === 'string' && mapping[key].startsWith(prefix)) : [];
+      const elsewhere = taskReferences({ ...target, config: { ...target.config, [field]: Object.fromEntries(Object.entries(mapping || {}).filter(([key]) => !keys.includes(key))) } }).some(ref => ref.source === link.source);
+      if (!keys.length) {
+        alert(`The reference to ${link.source} is part of ${target.name}'s configuration (for example its command). Edit it in the Inspector to remove the link.`);
+        select(target.name);
+        return;
+      }
+      if (!confirm(`Remove input${keys.length > 1 ? 's' : ''} ${keys.join(', ')} of ${target.name}?`)) return;
+      const next = { ...mapping };
+      keys.forEach(key => delete next[key]);
+      target.config = { ...target.config, [field]: next };
+      if (elsewhere) alert(`${target.name} still references ${link.source} elsewhere in its configuration, so the link remains.`);
+    }
+    deriveLinks();
+    render();
+    if (selected) showInspector(findTask(selected));
+    scheduleSave(0);
+  }
+
+  function deleteTask(name) {
+    const task = findTask(name);
+    if (!task || !editable) return;
+    const dependants = graph.links.filter(link => link.source === name).map(link => link.target);
+    const message = dependants.length
+      ? `Delete ${name}? ${[...new Set(dependants)].join(', ')} depend${dependants.length === 1 ? 's' : ''} on it; their named inputs and explicit dependencies on ${name} are removed too.`
+      : `Delete ${name}?`;
+    if (!confirm(message)) return;
+    graph.tasks = graph.tasks.filter(item => item !== task);
+    const prefix = `workflow:///${name}/`;
+    graph.tasks.forEach(other => {
+      other.explicit_prevs = (other.explicit_prevs || []).filter(source => source !== name);
+      const field = referenceField(other);
+      const mapping = field ? other.config[field] : null;
+      if (mapping && typeof mapping === 'object' && !Array.isArray(mapping)) {
+        other.config = { ...other.config, [field]: Object.fromEntries(Object.entries(mapping).filter(([, value]) => !(typeof value === 'string' && value.startsWith(prefix)))) };
+      }
+    });
+    selected = null;
+    deriveLinks();
+    render();
+    showEmptyInspector();
+    scheduleSave(0);
+  }
+
+  function duplicateTask(name) {
+    const task = findTask(name);
+    if (!task || !editable) return;
+    const copy = { ...clone(task), name: uniqueName(`${task.name}_copy`), x: task.x + 40, y: task.y + 40 };
+    graph.tasks.push(copy);
+    deriveLinks();
+    select(copy.name);
+    scheduleSave(0);
+  }
+
+  function renameReferences(value, oldName, newName) {
+    if (typeof value === 'string') {
+      const escaped = oldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const workflow = (graph.name || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return value
+        .replace(new RegExp(`workflow:///${escaped}(?=/)`, 'g'), `workflow:///${newName}`)
+        .replace(new RegExp(`workflow://${workflow}/${escaped}(?=/)`, 'g'), `workflow://${graph.name}/${newName}`);
+    }
+    if (Array.isArray(value)) return value.map(item => renameReferences(item, oldName, newName));
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, renameReferences(item, oldName, newName)]));
+    return value;
+  }
+
+  function autoLayout() {
+    const names = graph.tasks.map(task => task.name);
+    const incoming = Object.fromEntries(names.map(name => [name, 0]));
+    const nexts = Object.fromEntries(names.map(name => [name, []]));
+    graph.links.forEach(link => {
+      if (nexts[link.source] && link.target in incoming) { nexts[link.source].push(link.target); incoming[link.target]++; }
+    });
+    const level = Object.fromEntries(names.map(name => [name, 0]));
+    const queue = names.filter(name => !incoming[name]);
+    while (queue.length) {
+      const name = queue.shift();
+      nexts[name].forEach(target => {
+        level[target] = Math.max(level[target], level[name] + 1);
+        if (!--incoming[target]) queue.push(target);
+      });
+    }
+    const columns = {};
+    names.forEach(name => (columns[level[name]] ||= []).push(name));
+    Object.entries(columns).forEach(([column, members]) => {
+      members.sort().forEach((name, index) => {
+        const task = findTask(name);
+        task.x = 60 + Number(column) * 260;
+        task.y = 60 + index * 120 + (members.length === 1 ? 60 : 0);
+      });
+    });
+    render();
+    fit();
+    scheduleSave(0);
+  }
+
+  // ------------------------------------------------------------------ selection & inspector
+  function select(name) {
+    if (selected === name && inspector.querySelector('#applyInspector')) return;
+    if (selected && selected !== name) {
+      const previous = findTask(selected);
+      if (previous && inspectorDirty() && !applyInspector(previous, { quiet: true })) return;
+    }
+    selected = name;
+    render();
+    const task = findTask(name);
+    if (task) showInspector(task);
+  }
+
+  function clearSelection() {
+    if (selected) {
+      const previous = findTask(selected);
+      if (previous && inspectorDirty() && !applyInspector(previous, { quiet: true })) return;
+    }
+    selected = null;
+    render();
+    showEmptyInspector();
+  }
+
+  function showEmptyInspector() {
+    destroyAce();
+    const counts = graph.tasks.length
+      ? `<p class="small text-body-secondary">${graph.tasks.length} task${graph.tasks.length === 1 ? '' : 's'}, ${graph.links.filter(link => link.kind === 'data').length} data link(s), ${graph.links.filter(link => link.kind === 'explicit').length} explicit dependenc${graph.links.filter(link => link.kind === 'explicit').length === 1 ? 'y' : 'ies'}.</p>`
+      : '';
+    inspector.innerHTML = `<p class="text-body-secondary">Select a task to edit it.</p>${counts}
+      <div class="small text-body-secondary"><span class="d-inline-block border-top border-2 me-1" style="width:24px;border-color:var(--dw-link)!important"></span>data link (<code>workflow:///</code>)<br>
+      <span class="d-inline-block border-top border-2 me-1" style="width:24px;border-style:dashed!important;border-color:var(--dw-link-explicit)!important"></span>explicit dependency (<code>explicit_prevs</code>)</div>`;
+  }
+
+  const disabledAttr = () => (editable ? '' : 'disabled');
+
+  function fieldValue(field, config) {
+    const value = config[field.key];
+    switch (field.kind) {
+      case 'mapping': return Object.entries(value || {}).map(([key, item]) => `${key} = ${typeof item === 'string' ? item : JSON.stringify(item)}`).join('\n');
+      case 'json': return value === undefined || value === null || value === '' ? '' : JSON.stringify(value, null, 2);
+      case 'list': return Array.isArray(value) ? value.join('\n') : (value || '');
+      default: return value ?? field.default ?? '';
+    }
+  }
+
+  function renderField(field, config) {
+    const id = `cfg_${field.key}`;
+    const help = field.help ? `<div class="form-text">${field.help}</div>` : '';
+    const value = fieldValue(field, config);
+    const label = `<label class="form-label small fw-semibold mb-1" for="${id}">${escapeHtml(field.label)}</label>`;
+    if (field.kind === 'checkbox') {
+      const checked = config[field.key] ?? field.default ?? false;
+      return `<div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" role="switch" id="${id}" ${checked ? 'checked' : ''} ${disabledAttr()}><label class="form-check-label small" for="${id}">${escapeHtml(field.label)}</label>${help}</div>`;
+    }
+    if (field.kind === 'tristate') {
+      const current = config[field.key] === true ? 'true' : config[field.key] === false ? 'false' : '';
+      const options = [['', 'Workflow default'], ['true', 'On'], ['false', 'Off']].map(([v, text]) => `<option value="${v}" ${v === current ? 'selected' : ''}>${text}</option>`).join('');
+      return `<div class="mb-2">${label}<select class="form-select form-select-sm" id="${id}" ${disabledAttr()}>${options}</select>${help}</div>`;
+    }
+    if (field.kind === 'select') {
+      const options = [...new Set([...(field.options || []), ...(value && !(field.options || []).includes(value) ? [value] : [])])];
+      return `<div class="mb-2">${label}<select class="form-select form-select-sm" id="${id}" ${disabledAttr()}>${options.map(option => `<option ${option === value ? 'selected' : ''}>${escapeHtml(option)}</option>`).join('')}</select>${help}</div>`;
+    }
+    if (field.kind === 'code') {
+      return `<div class="mb-2">${label}<textarea class="form-control form-control-sm mono" id="${id}" rows="8" spellcheck="false" data-mode="${field.mode || 'sh'}" ${disabledAttr()}>${escapeHtml(value)}</textarea>${help}</div>`;
+    }
+    if (['mapping', 'json', 'list', 'textarea'].includes(field.kind)) {
+      const rows = Math.min(12, Math.max(field.kind === 'json' ? 4 : 3, String(value).split('\n').length + 1));
+      return `<div class="mb-2">${label}<textarea class="form-control form-control-sm mono" id="${id}" rows="${rows}" spellcheck="false" placeholder="${escapeHtml(field.placeholder || (field.kind === 'mapping' ? 'name = value' : ''))}" ${disabledAttr()}>${escapeHtml(value)}</textarea>${help}</div>`;
+    }
+    const type = field.kind === 'integer' || field.kind === 'number' ? 'number' : field.kind === 'url' ? 'url' : 'text';
+    const step = field.kind === 'number' ? 'any' : '1';
+    return `<div class="mb-2">${label}<input class="form-control form-control-sm ${type === 'text' ? 'mono' : ''}" id="${id}" type="${type}" ${type === 'number' ? `step="${step}" min="0"` : ''} value="${escapeHtml(value)}" placeholder="${escapeHtml(field.placeholder || '')}" ${disabledAttr()}>${help}</div>`;
+  }
+
+  function parseMapping(text, label) {
+    const result = {};
+    text.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#')).forEach(line => {
+      const index = line.indexOf('=');
+      if (index < 1) throw new Error(`${label}: use one "name = value" per line`);
+      result[line.slice(0, index).trim()] = line.slice(index + 1).trim();
+    });
+    return result;
+  }
+
+  function readField(field, element) {
+    const raw = element.type === 'checkbox' ? element.checked : element.value;
+    switch (field.kind) {
+      case 'checkbox': return raw;
+      case 'tristate': return raw === '' ? undefined : raw === 'true';
+      case 'integer': {
+        if (String(raw).trim() === '') return undefined;
+        const value = Number(raw);
+        if (!Number.isInteger(value) || value < 0) throw new Error(`${field.label} must be a non-negative integer`);
+        return value;
+      }
+      case 'number': {
+        if (String(raw).trim() === '') return undefined;
+        const value = Number(raw);
+        if (!Number.isFinite(value) || value < 0) throw new Error(`${field.label} must be a non-negative number`);
+        return value;
+      }
+      case 'mapping': return parseMapping(raw, field.label);
+      case 'list': return raw.split(/\n|,/).map(item => item.trim()).filter(Boolean);
+      case 'json': {
+        if (!raw.trim()) return undefined;
+        try { return JSON.parse(raw); } catch (error) { throw new Error(`${field.label} must be valid JSON (${error.message})`); }
+      }
+      default: return raw;
+    }
+  }
+
+  function showInspector(task) {
+    destroyAce();
+    const spec = specOf(task);
+    const config = task.config || {};
+    const basic = spec.fields.filter(field => !field.advanced);
+    const advanced = spec.fields.filter(field => field.advanced);
+    const incoming = graph.links.filter(link => link.target === task.name);
+    const outgoing = graph.links.filter(link => link.source === task.name);
+    const others = graph.tasks.filter(other => other.name !== task.name);
+    const producers = others.flatMap(other => producedFiles(other).map(path => `workflow:///${other.name}/${path}`));
+    const linkItem = (link, otherName) => `<li class="small">${link.kind === 'explicit' ? '<span class="badge text-bg-warning">after</span>' : '<span class="badge text-bg-secondary">data</span>'} <code>${escapeHtml(otherName)}</code>${link.kind === 'data' ? ` <span class="text-body-secondary mono">${escapeHtml(link.path)}</span>` : ''}${link.missing ? ' <span class="text-danger">missing task</span>' : ''}</li>`;
+
+    inspector.innerHTML = `
+      <div class="d-flex align-items-center gap-2 mb-2 cat-${spec.category}"><span class="type-icon" aria-hidden="true">${escapeHtml(spec.icon)}</span>
+        <div><div class="fw-semibold">${escapeHtml(spec.label)} task</div><div class="small text-body-secondary">${escapeHtml(spec.description)}</div></div></div>
+      <div id="inspectorErrors" class="alert alert-danger py-2 small" role="alert" hidden></div>
+      <div class="mb-2"><label class="form-label small fw-semibold mb-1" for="iName">Task name</label>
+        <input id="iName" class="form-control form-control-sm mono" value="${escapeHtml(task.name)}" pattern="[A-Za-z0-9_-]{1,80}" maxlength="80" ${disabledAttr()}></div>
+      <div class="inspector-section">Configuration</div>
+      ${basic.map(field => renderField(field, config)).join('')}
+      ${advanced.length ? `<details class="mb-2"><summary class="small fw-semibold">Advanced options</summary><div class="pt-2">${advanced.map(field => renderField(field, config)).join('')}</div></details>` : ''}
+      ${producers.length && editable ? `<div class="mb-2"><div class="small fw-semibold mb-1">Insert a producer reference</div><div class="d-flex flex-wrap gap-1">${producers.slice(0, 24).map(ref => `<button type="button" class="btn btn-sm btn-outline-secondary mono reference-chip py-0" data-reference="${escapeHtml(ref)}" title="Insert at the cursor of the focused field">${escapeHtml(ref.replace('workflow:///', ''))}</button>`).join('')}</div></div>` : ''}
+      <div class="inspector-section">Dependencies</div>
+      <div class="mb-2"><label class="form-label small fw-semibold mb-1" for="iExplicit">Run after (explicit dependencies)</label>
+        <select id="iExplicit" class="form-select form-select-sm" multiple size="${Math.min(5, Math.max(2, others.length))}" ${disabledAttr()} aria-describedby="iExplicitHelp">
+          ${others.map(other => `<option value="${escapeHtml(other.name)}" ${(task.explicit_prevs || []).includes(other.name) ? 'selected' : ''}>${escapeHtml(other.name)}</option>`).join('')}
+        </select><div id="iExplicitHelp" class="form-text">Ordering without data staging, saved as DAGonStar <code>explicit_prevs</code>.</div></div>
+      <div class="row small g-2 mb-2"><div class="col-6"><div class="fw-semibold">Inputs from</div><ul class="list-unstyled mb-0">${incoming.map(link => linkItem(link, link.source)).join('') || '<li class="text-body-secondary">none</li>'}</ul></div>
+        <div class="col-6"><div class="fw-semibold">Feeds</div><ul class="list-unstyled mb-0">${outgoing.map(link => linkItem(link, link.target)).join('') || '<li class="text-body-secondary">none</li>'}</ul></div></div>
+      <details class="mb-3"><summary class="small fw-semibold">Raw configuration JSON</summary>
+        <textarea id="iConfig" class="form-control form-control-sm mono mt-2" rows="10" spellcheck="false" ${disabledAttr()}>${escapeHtml(JSON.stringify(config, null, 2))}</textarea>
+        <div class="form-text">When this panel is open, Apply saves the JSON as written.</div></details>
+      <div class="d-flex flex-wrap gap-2">
+        <button id="applyInspector" class="btn btn-primary btn-sm" type="button" ${disabledAttr()}>Apply</button>
+        <button id="duplicateTask" class="btn btn-outline-secondary btn-sm" type="button" ${disabledAttr()}>Duplicate</button>
+        <button id="deleteTask" class="btn btn-outline-danger btn-sm ms-auto" type="button" ${disabledAttr()}>Delete</button>
+      </div>`;
+
+    inspector.dataset.snapshot = '';
+    inspector.querySelector('#applyInspector').addEventListener('click', () => applyInspector(task));
+    inspector.querySelector('#deleteTask').addEventListener('click', () => deleteTask(task.name));
+    inspector.querySelector('#duplicateTask').addEventListener('click', () => duplicateTask(task.name));
+    inspector.querySelectorAll('.reference-chip').forEach(chip => chip.addEventListener('mousedown', event => event.preventDefault()));
+    inspector.querySelectorAll('.reference-chip').forEach(chip => chip.addEventListener('click', () => insertReference(chip.dataset.reference)));
+    inspector.addEventListener('focusin', rememberFocus);
+    upgradeCodeFields();
+    inspector.dataset.snapshot = inspectorSnapshot();
+  }
+
+  let lastFocused = null;
+  function rememberFocus(event) {
+    if (event.target.matches('textarea, input[type="text"], input:not([type])')) lastFocused = event.target;
+  }
+
+  function insertReference(reference) {
+    const focusedAce = aceEditors.find(item => item.editor.isFocused() || item.editor === lastFocused);
+    if (focusedAce) { focusedAce.editor.insert(reference); focusedAce.editor.focus(); return; }
+    const target = lastFocused && inspector.contains(lastFocused) ? lastFocused : inspector.querySelector('#cfg_command, #cfg_inputs');
+    if (!target) return;
+    const start = target.selectionStart ?? target.value.length;
+    const end = target.selectionEnd ?? target.value.length;
+    target.setRangeText(reference, start, end, 'end');
+    target.focus();
+  }
+
+  function upgradeCodeFields() {
+    if (!window.ace) return;
+    const dark = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+    inspector.querySelectorAll('textarea[data-mode]').forEach(textarea => {
+      const host = document.createElement('div');
+      host.className = `code-editor ${textarea.dataset.mode}`;
+      textarea.after(host);
+      textarea.hidden = true;
+      const editor = window.ace.edit(host);
+      editor.setTheme(dark ? 'ace/theme/tomorrow_night' : 'ace/theme/github');
+      editor.session.setMode(textarea.dataset.mode === 'python' ? 'ace/mode/python' : 'ace/mode/sh');
+      editor.setValue(textarea.value, -1);
+      editor.setOptions({ fontSize: '13px', showPrintMargin: false, wrap: true, tabSize: textarea.dataset.mode === 'python' ? 4 : 2, useSoftTabs: true, readOnly: !editable });
+      editor.session.on('change', () => { textarea.value = editor.getValue(); });
+      editor.on('focus', () => { lastFocused = editor; });
+      editor.commands.addCommand({ name: 'apply', bindKey: { win: 'Ctrl-Enter', mac: 'Command-Enter' }, exec: () => applyInspector(findTask(selected)) });
+      aceEditors.push({ editor, textarea });
+    });
+  }
+
+  function destroyAce() {
+    aceEditors.forEach(item => item.editor.destroy());
+    aceEditors = [];
+    lastFocused = null;
+  }
+
+  function inspectorSnapshot() {
+    return [...inspector.querySelectorAll('input, textarea, select')].map(element => (
+      element.type === 'checkbox' ? element.checked : element.multiple ? [...element.selectedOptions].map(option => option.value).join(',') : element.value
+    )).join('\u0000');
+  }
+  const inspectorDirty = () => editable && inspector.querySelector('#applyInspector') && inspector.dataset.snapshot !== inspectorSnapshot();
+
+  function showErrors(message) {
+    const box = inspector.querySelector('#inspectorErrors');
+    if (!box) return alert(message);
+    box.textContent = message;
+    box.hidden = !message;
+    if (message) box.scrollIntoView({ block: 'nearest' });
+  }
+
+  /** Read the inspector into ``task``; returns false (and shows why) on errors. */
+  function applyInspector(task, { quiet = false } = {}) {
+    if (!task || !editable) return true;
+    try {
+      const spec = specOf(task);
+      const name = inspector.querySelector('#iName').value.trim();
+      if (!NAME_RE.test(name)) throw new Error('Task names may contain only letters, numbers, underscores, and hyphens (max 80).');
+      if (graph.tasks.some(other => other !== task && other.name === name)) throw new Error(`A task named ${name} already exists.`);
+      let config;
+      const raw = inspector.querySelector('details[open] #iConfig');
+      if (raw) {
+        try { config = JSON.parse(raw.value); } catch (error) { throw new Error(`Raw configuration must be valid JSON (${error.message})`); }
+        if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Raw configuration must be a JSON object.');
+      } else {
+        config = { ...task.config };
+        delete config.time_limit;
+        spec.fields.forEach(field => {
+          const element = inspector.querySelector(`#cfg_${CSS.escape(field.key)}`);
+          if (!element) return;
+          const value = readField(field, element);
+          if (value === undefined) delete config[field.key];
+          else config[field.key] = value;
+        });
+        validateConfig(task, config, name);
+      }
+      const explicit = [...inspector.querySelector('#iExplicit').selectedOptions].map(option => option.value);
+      const oldName = task.name;
+      task.config = config;
+      task.explicit_prevs = explicit;
+      if (oldName !== name) {
+        graph.tasks.forEach(other => {
+          other.config = renameReferences(other.config, oldName, name);
+          other.explicit_prevs = (other.explicit_prevs || []).map(source => (source === oldName ? name : source));
+        });
+        task.name = name;
+        if (task.task_type === 'native' && typeof config.callable === 'string') {
+          config.callable = config.callable.replace(`workflow_functions.${oldName}:`, `workflow_functions.${name}:`);
+        }
+        selected = name;
+      }
+      deriveLinks();
+      render();
+      showInspector(task);
+      scheduleSave(0);
+      return true;
+    } catch (error) {
+      showErrors(error.message);
+      if (!quiet) inspector.querySelector('#inspectorErrors')?.focus?.();
+      return false;
+    }
+  }
+
+  function validateConfig(task, config, name) {
+    const type = task.task_type;
+    const mappingNames = config.inputs && typeof config.inputs === 'object' && !Array.isArray(config.inputs) ? Object.keys(config.inputs) : [];
+    if (COMMAND_TYPES.has(type) && mappingNames.some(key => !INPUT_RE.test(key))) {
+      throw new Error('Named inputs must be shell identifiers (letters, digits, underscores; not starting with a digit).');
+    }
+    if (['docker', 'kubernetes', 'apptainer', 'nomad'].includes(type) && !String(config.image || '').trim()) throw new Error('Set the container image.');
+    if (type === 'native') {
+      const source = String(config.source || '');
+      if (!config.callable && source.trim()) {
+        const match = source.match(/^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/m);
+        if (match) config.callable = `workflow_functions.${name}:${match[1]}`;
+      }
+      if (!/^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$/.test(config.callable || '')) throw new Error('Set Callable to an importable module:function name.');
+      if (source.length > 250000) throw new Error('Native source must be 250 KB or smaller.');
+      Object.entries(config.outputs || {}).forEach(([key, path]) => {
+        if (!INPUT_RE.test(key) || !PATH_RE.test(String(path))) throw new Error('Native outputs need a parameter name and a safe relative path.');
+      });
+    }
+    if (type === 'llm') {
+      if (!config.provider) throw new Error('Set the LLM provider name.');
+      if (!config.prompt || typeof config.prompt !== 'object' || !Array.isArray(config.prompt.messages)) throw new Error('The LLM request must be a JSON object with a messages array.');
+      if (!config.output_file || !PATH_RE.test(config.output_file)) throw new Error('Response file must be a safe relative path.');
+    }
+    if (type === 'faas' && (!config.provider || !config.function)) throw new Error('FaaS tasks need a provider and a function.');
+    if (type === 'agentic' && (!Array.isArray(config.requirements) || !config.requirements.length)) throw new Error('Agentic tasks need at least one requirement.');
+    if (type === 'web' && !/^https?:\/\//.test(config.url || '')) throw new Error('Web tasks need an http(s) URL.');
+  }
+
+  // ------------------------------------------------------------------ connect dialog
+  const connectModalEl = document.getElementById('connectModal');
+  const connectModal = window.bootstrap ? new window.bootstrap.Modal(connectModalEl) : null;
+  let pendingConnection = null;
+
+  function openConnectDialog(sourceName, targetName) {
+    const source = findTask(sourceName);
+    const target = findTask(targetName);
+    if (!source || !target || source === target) return;
+    if (graph.links.some(link => link.source === sourceName && link.target === targetName)) {
+      setStatus(`${sourceName} already feeds ${targetName}`, '');
+      return;
+    }
+    if (wouldCycle(sourceName, targetName)) {
+      setStatus(`Not connected: ${targetName} → … → ${sourceName} already exists, so the graph would have a cycle`, 'error');
+      return;
+    }
+    pendingConnection = { source, target };
+    const supportsData = referenceField(target) !== null;
+    document.getElementById('connectSummary').innerHTML = `<code>${escapeHtml(sourceName)}</code> → <code>${escapeHtml(targetName)}</code>`;
+    document.getElementById('connectData').disabled = !supportsData;
+    document.getElementById(supportsData ? 'connectData' : 'connectExplicit').checked = true;
+    const files = producedFiles(source);
+    document.getElementById('connectPaths').innerHTML = files.map(file => `<option value="${escapeHtml(file)}">`).join('');
+    document.getElementById('connectPath').value = files[0] || 'output.txt';
+    const field = referenceField(target);
+    const existing = Object.keys((field && target.config[field]) || {});
+    let input = sourceName.replace(/[^A-Za-z0-9_]/g, '_').replace(/^(\d)/, '_$1') || 'input';
+    let index = 2;
+    const base = input;
+    while (existing.includes(input)) input = `${base}_${index++}`;
+    document.getElementById('connectInput').value = input;
+    document.getElementById('connectHint').innerHTML = COMMAND_TYPES.has(target.task_type)
+      ? `Stored in <code>inputs</code>; use <code>$${escapeHtml(input)}</code> in the command for the staged path.`
+      : `Stored in <code>${escapeHtml(field || 'inputs')}</code> of ${escapeHtml(targetName)}.`;
+    toggleConnectFields();
+    if (connectModal) connectModal.show();
+  }
+
+  function toggleConnectFields() {
+    const data = document.getElementById('connectData').checked;
+    document.getElementById('connectDataFields').hidden = !data;
+    document.querySelectorAll('#connectDataFields input').forEach(input => { input.required = data; });
+  }
+  document.querySelectorAll('input[name="connectKind"]').forEach(radio => radio.addEventListener('change', toggleConnectFields));
+  document.getElementById('connectInput').addEventListener('input', event => {
+    const target = pendingConnection?.target;
+    if (target && COMMAND_TYPES.has(target.task_type)) document.getElementById('connectHint').innerHTML = `Stored in <code>inputs</code>; use <code>$${escapeHtml(event.target.value)}</code> in the command for the staged path.`;
+  });
+
+  document.getElementById('connectForm').addEventListener('submit', event => {
+    event.preventDefault();
+    if (!pendingConnection) return;
+    const { source, target } = pendingConnection;
+    if (document.getElementById('connectExplicit').checked) {
+      target.explicit_prevs = [...new Set([...(target.explicit_prevs || []), source.name])];
+    } else {
+      const path = document.getElementById('connectPath').value.trim();
+      const input = document.getElementById('connectInput').value.trim();
+      if (!PATH_RE.test(path) || !INPUT_RE.test(input)) return;
+      addDataLink(source, target, path, input);
+    }
+    pendingConnection = null;
+    connectModal?.hide();
+    deriveLinks();
+    if (selected === target.name) { render(); showInspector(target); } else select(target.name);
+    scheduleSave(0);
+  });
+
+  function wouldCycle(source, target) {
+    const stack = [target];
+    const seen = new Set();
+    while (stack.length) {
+      const name = stack.pop();
+      if (name === source) return true;
+      if (seen.has(name)) continue;
+      seen.add(name);
+      graph.links.filter(link => link.source === name).forEach(link => stack.push(link.target));
+    }
+    return false;
+  }
+
+  // ------------------------------------------------------------------ global events
+  document.querySelectorAll('#palette [data-type]').forEach(button => {
+    button.addEventListener('click', () => addTask(button.dataset.type));
+    button.addEventListener('dragstart', event => { event.dataTransfer.setData('application/x-dagonweb-type', button.dataset.type); event.dataTransfer.effectAllowed = 'copy'; });
+  });
+  workspace.addEventListener('dragover', event => { if (editable && event.dataTransfer.types.includes('application/x-dagonweb-type')) event.preventDefault(); });
+  workspace.addEventListener('drop', event => {
+    const type = event.dataTransfer.getData('application/x-dagonweb-type');
+    if (!type) return;
+    event.preventDefault();
+    const point = canvasPoint(event);
+    addTask(type, { x: point.x - NODE_WIDTH / 2, y: point.y - 25 });
+  });
+
+  document.getElementById('paletteFilter').addEventListener('input', event => {
+    const query = event.target.value.trim().toLowerCase();
+    document.querySelectorAll('#palette .palette-item').forEach(item => { item.hidden = Boolean(query) && !item.textContent.toLowerCase().includes(query); });
+    document.querySelectorAll('#palette [data-palette-group]').forEach(group => {
+      let next = group.nextElementSibling;
+      let visible = false;
+      while (next && next.classList.contains('palette-item')) { visible ||= !next.hidden; next = next.nextElementSibling; }
+      group.hidden = !visible;
+    });
+  });
+
+  document.addEventListener('pointermove', event => {
+    if (linkDrag) {
+      const point = canvasPoint(event);
+      linkDrag.mx = point.x;
+      linkDrag.my = point.y;
+      drawLinks();
+      return;
+    }
+    if (!drag) return;
+    const task = findTask(drag.name);
+    if (!task) return;
+    const point = canvasPoint(event);
+    const x = Math.max(0, Math.round((point.x - drag.dx) / 10) * 10);
+    const y = Math.max(0, Math.round((point.y - drag.dy) / 10) * 10);
+    if (x === task.x && y === task.y) return;
+    task.x = x;
+    task.y = y;
+    drag.moved = true;
+    const node = canvas.querySelector(`.task-node[data-name="${CSS.escape(task.name)}"]`);
+    if (node) { node.style.left = `${x}px`; node.style.top = `${y}px`; }
+    drawLinks();
+  });
+
+  document.addEventListener('pointerup', event => {
+    if (linkDrag) {
+      const node = document.elementFromPoint(event.clientX, event.clientY)?.closest('.task-node');
+      const source = linkDrag.source;
+      linkDrag = null;
+      workspace.classList.remove('workspace-linking');
+      drawLinks();
+      if (node && node.dataset.name !== source) openConnectDialog(source, node.dataset.name);
+      return;
+    }
+    if (drag) {
+      const moved = drag.moved;
+      drag = null;
+      if (moved) { resizeCanvas(); scheduleSave(); }
+    }
+  });
+
+  workspace.addEventListener('pointerdown', event => {
+    if (event.target === workspace || event.target === canvas || event.target === svg) clearSelection();
+  });
+
+  document.addEventListener('keydown', event => {
+    const typing = event.target.closest('input, textarea, select, .ace_editor, [contenteditable]');
+    const mod = event.ctrlKey || event.metaKey;
+    if (mod && event.key.toLowerCase() === 's') {
+      event.preventDefault();
+      const task = selected && findTask(selected);
+      if (task && inspectorDirty() && !applyInspector(task)) return;
+      save();
+      return;
+    }
+    if (mod && event.key === 'Enter' && selected) { event.preventDefault(); applyInspector(findTask(selected)); return; }
+    if (typing || document.querySelector('.modal.show')) return;
+    if (!selected) return;
+    const task = findTask(selected);
+    if (!task) return;
+    if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); deleteTask(task.name); }
+    else if (event.key === 'Escape') clearSelection();
+    else if (mod && event.key.toLowerCase() === 'd') { event.preventDefault(); duplicateTask(task.name); }
+    else if (editable && event.key.startsWith('Arrow')) {
+      event.preventDefault();
+      const step = event.shiftKey ? 50 : 10;
+      task.x = Math.max(0, task.x + (event.key === 'ArrowRight' ? step : event.key === 'ArrowLeft' ? -step : 0));
+      task.y = Math.max(0, task.y + (event.key === 'ArrowDown' ? step : event.key === 'ArrowUp' ? -step : 0));
+      render();
+      canvas.querySelector(`.task-node[data-name="${CSS.escape(task.name)}"]`)?.focus();
+      scheduleSave();
+    }
+  });
+
+  document.getElementById('autoLayout').addEventListener('click', autoLayout);
+  document.getElementById('zoomIn').addEventListener('click', () => setZoom(zoom + 0.1));
+  document.getElementById('zoomOut').addEventListener('click', () => setZoom(zoom - 0.1));
+  document.getElementById('zoomReset').addEventListener('click', () => setZoom(1));
+  document.getElementById('zoomFit').addEventListener('click', () => fit());
+  workspace.addEventListener('wheel', event => {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    setZoom(zoom - Math.sign(event.deltaY) * 0.1);
+  }, { passive: false });
+  window.addEventListener('resize', () => { resizeCanvas(); drawLinks(); });
+
+  // Save pending inspector edits before running, so the run uses them.
+  document.getElementById('runForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    const task = selected && findTask(selected);
+    if (task && inspectorDirty() && !applyInspector(task)) return;
+    if (editable && !(await save())) return;
+    if (!graph.tasks.length) { setStatus('Add at least one task before running', 'error'); return; }
+    event.target.submit();
+  });
+  window.addEventListener('beforeunload', event => {
+    if (editable && (inspectorDirty() || statusEl.classList.contains('saving') || statusEl.classList.contains('error'))) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+  });
+
+  // ------------------------------------------------------------------ inspector width
+  const resizer = document.getElementById('inspectorResizer');
+  const toggleFull = document.getElementById('toggleInspectorFull');
+  function setExpanded(expanded) {
+    root.classList.toggle('inspector-expanded', expanded);
+    toggleFull.textContent = expanded ? 'Standard' : 'Expand';
+    toggleFull.title = expanded ? 'Restore standard Inspector width' : 'Expand Inspector';
+    toggleFull.setAttribute('aria-pressed', String(expanded));
+    aceEditors.forEach(item => item.editor.resize());
+    if (!expanded) { resizeCanvas(); drawLinks(); }
+  }
+  function setInspectorWidth(width) {
+    setExpanded(false);
+    const bounds = root.getBoundingClientRect();
+    const max = Math.min(640, Math.max(280, bounds.width - 240 - 320 - 24));
+    const value = Math.max(280, Math.min(max, width));
+    root.style.setProperty('--inspector-width', `${value}px`);
+    resizer.setAttribute('aria-valuemax', String(Math.round(max)));
+    resizer.setAttribute('aria-valuenow', String(Math.round(value)));
+    try { localStorage.setItem('dagonweb.inspector-width', String(Math.round(value))); } catch { /* ignore */ }
+    aceEditors.forEach(item => item.editor.resize());
+  }
+  toggleFull.addEventListener('click', () => setExpanded(!root.classList.contains('inspector-expanded')));
+  resizer.addEventListener('pointerdown', event => {
+    event.preventDefault();
+    resizer.setPointerCapture(event.pointerId);
+    const move = moveEvent => setInspectorWidth(root.getBoundingClientRect().right - moveEvent.clientX);
+    const up = () => { resizer.removeEventListener('pointermove', move); resizer.removeEventListener('pointerup', up); resizeCanvas(); drawLinks(); };
+    resizer.addEventListener('pointermove', move);
+    resizer.addEventListener('pointerup', up);
+  });
+  resizer.addEventListener('keydown', event => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const current = parseFloat(getComputedStyle(root).getPropertyValue('--inspector-width')) || 360;
+    setInspectorWidth(current + (event.key === 'ArrowLeft' ? 20 : -20));
+  });
+  try {
+    const saved = Number(localStorage.getItem('dagonweb.inspector-width'));
+    if (saved) setInspectorWidth(saved);
+  } catch { /* ignore */ }
+
+  showEmptyInspector();
+  load();
+})();

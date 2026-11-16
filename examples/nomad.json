@@ -1,0 +1,32 @@
+{
+  "dagonweb": {
+    "runtime": {
+      "portable_emulation": true
+    }
+  },
+  "host": "localhost",
+  "id": null,
+  "name": "nomad_example",
+  "tasks": {
+    "nomad_task": {
+      "command": "echo hello from Nomad > output.txt",
+      "dagonweb": {
+        "config": {
+          "command": "echo hello from Nomad > output.txt",
+          "image": "ubuntu:22.04",
+          "inputs": {},
+          "nomad_address": "http://localhost:4646"
+        },
+        "x": 160,
+        "y": 160
+      },
+      "explicit_prevs": [],
+      "name": "nomad_task",
+      "nexts": [],
+      "prevs": [],
+      "status": "READY",
+      "type": "nomad",
+      "working_dir": null
+    }
+  }
+}

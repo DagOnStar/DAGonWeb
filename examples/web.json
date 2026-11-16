@@ -1,0 +1,39 @@
+{
+  "host": "localhost",
+  "id": null,
+  "name": "web_example",
+  "tasks": {
+    "web_task": {
+      "command": "",
+      "dagonweb": {
+        "config": {
+          "headers": {},
+          "method": "GET",
+          "outputs": {
+            "body": "response.txt"
+          },
+          "query": {},
+          "url": "https://example.com"
+        },
+        "x": 160,
+        "y": 160
+      },
+      "explicit_prevs": [],
+      "name": "web_task",
+      "nexts": [],
+      "prevs": [],
+      "specification": {
+        "headers": {},
+        "method": "GET",
+        "outputs": {
+          "body": "response.txt"
+        },
+        "query": {},
+        "url": "https://example.com"
+      },
+      "status": "READY",
+      "type": "web",
+      "working_dir": null
+    }
+  }
+}

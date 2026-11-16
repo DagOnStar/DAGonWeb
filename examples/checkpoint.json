@@ -1,0 +1,72 @@
+{
+  "host": "localhost",
+  "id": null,
+  "name": "checkpoint_example",
+  "tasks": {
+    "checkpoint": {
+      "command": "workflow:///simulate/output/state.txt",
+      "dagonweb": {
+        "config": {
+          "command": "",
+          "inputs": {
+            "state": "workflow:///simulate/output/state.txt"
+          }
+        },
+        "x": 400,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "checkpoint",
+      "nexts": [],
+      "prevs": [
+        "simulate"
+      ],
+      "status": "READY",
+      "type": "checkpoint",
+      "working_dir": null
+    },
+    "report": {
+      "command": "state=workflow:///simulate/output/state.txt ;\ncat $state > report.txt",
+      "dagonweb": {
+        "config": {
+          "command": "cat $state > report.txt",
+          "inputs": {
+            "state": "workflow:///simulate/output/state.txt"
+          }
+        },
+        "x": 680,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "report",
+      "nexts": [],
+      "prevs": [
+        "simulate"
+      ],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "simulate": {
+      "command": "mkdir -p output\necho 42 > output/state.txt",
+      "dagonweb": {
+        "config": {
+          "command": "mkdir -p output\necho 42 > output/state.txt",
+          "inputs": {}
+        },
+        "x": 120,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "simulate",
+      "nexts": [
+        "checkpoint",
+        "report"
+      ],
+      "prevs": [],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    }
+  }
+}

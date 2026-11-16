@@ -1,0 +1,82 @@
+{
+  "host": "localhost",
+  "id": null,
+  "name": "iot_example",
+  "tasks": {
+    "iot_task": {
+      "command": null,
+      "dagonweb": {
+        "config": {
+          "completion": {
+            "count": 2,
+            "mode": "sample_count",
+            "timeout_seconds": 10
+          },
+          "operation": "observe",
+          "outputs": {
+            "observations": "outputs/observations.json"
+          },
+          "provider": "mock",
+          "request": {
+            "events": [
+              {
+                "sequence": 1,
+                "unit": "Cel",
+                "value": 20.1
+              },
+              {
+                "sequence": 2,
+                "unit": "Cel",
+                "value": 20.4
+              }
+            ]
+          },
+          "resource": "temperature",
+          "target": {
+            "device_id": "station-01"
+          }
+        },
+        "x": 160,
+        "y": 160
+      },
+      "explicit_prevs": [],
+      "iot": {
+        "completion": {
+          "count": 2,
+          "mode": "sample_count",
+          "timeout_seconds": 10
+        },
+        "operation": "observe",
+        "outputs": {
+          "observations": "outputs/observations.json"
+        },
+        "provider": "mock",
+        "request": {
+          "events": [
+            {
+              "sequence": 1,
+              "unit": "Cel",
+              "value": 20.1
+            },
+            {
+              "sequence": 2,
+              "unit": "Cel",
+              "value": 20.4
+            }
+          ]
+        },
+        "resource": "temperature",
+        "schemaVersion": 1,
+        "target": {
+          "device_id": "station-01"
+        }
+      },
+      "name": "iot_task",
+      "nexts": [],
+      "prevs": [],
+      "status": "READY",
+      "type": "iot",
+      "working_dir": null
+    }
+  }
+}

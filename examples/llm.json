@@ -1,0 +1,50 @@
+{
+  "dagonweb": {
+    "runtime": {
+      "portable_emulation": true
+    }
+  },
+  "host": "localhost",
+  "id": null,
+  "name": "llm_example",
+  "tasks": {
+    "llm_task": {
+      "command": "{\"messages\": [{\"content\": \"Summarize: {input}\", \"role\": \"user\"}]}",
+      "dagonweb": {
+        "config": {
+          "input_files": {},
+          "output_file": "response.json",
+          "params": {
+            "input": "DAGonStar runs workflows from laptops to HPC clusters and clouds."
+          },
+          "prompt": {
+            "messages": [
+              {
+                "content": "Summarize: {input}",
+                "role": "user"
+              }
+            ]
+          },
+          "provider": "openai-compatible",
+          "timeout": 120
+        },
+        "x": 160,
+        "y": 160
+      },
+      "explicit_prevs": [],
+      "input_files": {},
+      "name": "llm_task",
+      "nexts": [],
+      "output_file": "response.json",
+      "params": {
+        "input": "DAGonStar runs workflows from laptops to HPC clusters and clouds."
+      },
+      "prevs": [],
+      "provider": "openai-compatible",
+      "status": "READY",
+      "timeout": 120,
+      "type": "llm",
+      "working_dir": null
+    }
+  }
+}

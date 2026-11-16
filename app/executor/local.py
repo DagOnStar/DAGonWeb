@@ -1,19 +1,38 @@
+"""Run DAGonWeb workflows with the DAGonStar runtime.
+
+The executor builds a ``dagon.Workflow`` directly with ``DagonTask(...)``
+objects (so every task-type option reaches DAGonStar), records progress
+through DAGonStar's event hooks, and runs it with ``launch()`` / ``wait()``.
+Every file a run produces stays below the configured scratch root.
+"""
 from __future__ import annotations
 
-import json
 import importlib
-import os
-import shutil
+import json
+import logging
 import subprocess
 import sys
+import tempfile
+import threading
 import venv
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from flask import current_app
 from ..dagon_ini import merge_workflow_dagon_config, runtime_dagon_config
 from ..extensions import db
-from ..models import LEGACY_TASK_TYPES, RunStatus, Setting, TaskRun, Workflow, WorkflowRun
+from ..models import LINK_EXPLICIT, RunStatus, Setting, TaskRun, Workflow, WorkflowRun
+from ..task_specs import dagon_task_arguments
+
+CHECKPOINT_FILE = ("_dagonweb", "checkpoint.json")
+# sys.path is process-global: serialize the short windows that change it.
+_IMPORT_LOCK = threading.RLock()
+_TASK_EVENTS = {
+    "on_task_staging_in_start": "staging inputs",
+    "on_task_execute_start": "executing",
+    "on_task_staging_out_start": "staging outputs",
+}
 
 
 def timestamped_log(message: str) -> str:
@@ -36,18 +55,9 @@ def safe_child(root: Path, *parts: str) -> Path:
     return path
 
 
-def dagonstar_document(workflow: Workflow) -> dict[str, Any]:
-    """Build the runtime-only DAGonStar document for a stored workflow."""
-    document = workflow.as_json()
-    for task in document["tasks"].values():
-        if task["type"] == "web":
-            # DAGonStar's JSON loader otherwise defaults to a ``python``
-            # executable that may not exist in a virtualenv-only deployment.
-            task["python"] = sys.executable
-        elif task["type"] == "native" and not task.get("python"):
-            # Keep the native runner in the same environment as the web app.
-            task["python"] = sys.executable
-    return document
+def is_inside(root: Path, path: Path) -> bool:
+    resolved = path.resolve()
+    return resolved == root or root in resolved.parents
 
 
 def enable_fair_if_configured(runtime: Any, workflow: Workflow, run_dir: Path) -> None:
@@ -78,8 +88,12 @@ def enable_fair_if_configured(runtime: Any, workflow: Workflow, run_dir: Path) -
     runtime.enable_fair(fair_profile)
 
 
-def prepare_native_task_environments(workflow: Workflow, root: Path, document: dict[str, Any]) -> None:
-    """Install each Native task's declared requirements in its own scratch venv."""
+def prepare_native_task_environments(workflow: Workflow, root: Path) -> dict[str, dict[str, Any]]:
+    """Install each Native task's declared requirements in its own scratch venv.
+
+    Returns per-task ``DagonTask`` keyword overrides (the venv interpreter).
+    """
+    overrides: dict[str, dict[str, Any]] = {}
     environment_root = safe_child(root, f"workflow-{workflow.id}", "native_environments")
     for task in workflow.tasks:
         if task.normalized_task_type != "native":
@@ -107,7 +121,8 @@ def prepare_native_task_environments(workflow: Workflow, root: Path, document: d
         if completed.returncode:
             output = (completed.stdout + completed.stderr).strip()
             raise RuntimeError(f"Native task {task.name} requirements installation failed.\n{output}")
-        document["tasks"][task.name]["python"] = str(python)
+        overrides[task.name] = {"python": str(python)}
+    return overrides
 
 
 def materialize_native_sources(workflow: Workflow, root: Path) -> tuple[Path | None, set[str]]:
@@ -143,115 +158,223 @@ def materialize_native_sources(workflow: Workflow, root: Path) -> tuple[Path | N
     return (module_root, modules) if modules else (None, modules)
 
 
-def execute_workflow(workflow: Workflow, user_id: int, run: WorkflowRun | None = None) -> WorkflowRun:
-    root = scratch_root()
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_dir = safe_child(root, f"workflow-{workflow.id}", f"run-{stamp}" if run is None else f"run-{run.id}")
-    run_dir.mkdir(parents=True, exist_ok=True)
-    if run is None:
-        run = WorkflowRun(workflow_id=workflow.id, user_id=user_id, status=RunStatus.RUNNING.value, scratch_path=str(run_dir), log="")
-        db.session.add(run)
-    else:
-        run.status = RunStatus.RUNNING.value
-        run.scratch_path = str(run_dir)
-    run.log = (run.log or "") + timestamped_log("Workflow started.")
-    db.session.commit()
-    module_root: Path | None = None
-    try:
-        from dagon import Workflow as DagonStarWorkflow
-
-        module_root, modules = materialize_native_sources(workflow, root)
+@contextmanager
+def native_modules_importable(workflow: Workflow, root: Path) -> Iterator[None]:
+    """Make embedded Native sources importable while DAGonStar resolves them."""
+    module_root, modules = materialize_native_sources(workflow, root)
+    with _IMPORT_LOCK:
         if module_root:
             sys.path.insert(0, str(module_root))
             importlib.invalidate_caches()
             for module in modules:
                 sys.modules.pop(module, None)
+        try:
+            yield
+        finally:
+            if module_root and str(module_root) in sys.path:
+                sys.path.remove(str(module_root))
 
-        runtime_document = dagonstar_document(workflow)
-        prepare_native_task_environments(workflow, root, runtime_document)
-        runtime = DagonStarWorkflow(
-            workflow.name,
-            config=merge_workflow_dagon_config(runtime_dagon_config(Path(current_app.config["DAGON_INI_PATH"]), root), workflow.dagon_ini),
-            jsonload=runtime_document,
-        )
+
+def build_runtime_workflow(
+    workflow: Workflow,
+    config: dict[str, dict[str, Any]],
+    *,
+    checkpoint_file: str | None = None,
+    overrides: dict[str, dict[str, Any]] | None = None,
+) -> Any:
+    """Build a ``dagon.Workflow`` with one ``DagonTask`` per stored task.
+
+    Data dependencies are discovered by DAGonStar from ``workflow://``
+    references; explicit links become ``add_dependency_to`` edges, which
+    DAGonStar serializes as ``explicit_prevs``.
+    """
+    from dagon import Workflow as DagonStarWorkflow
+    from dagon.task import DagonTask, TaskType as DagonTaskType
+
+    options = workflow.runtime_options
+    runtime = DagonStarWorkflow(
+        workflow.name,
+        config=config,
+        max_threads=max(1, min(int(options.get("max_threads") or 10), 256)),
+        checkpoint_file=checkpoint_file,
+        portable_emulation=bool(options.get("portable_emulation")),
+        pre_stage=bool(options.get("pre_stage")),
+    )
+    overrides = overrides or {}
+    tasks: dict[str, Any] = {}
+    for task in workflow.tasks:
+        task_type = task.normalized_task_type
+        args, kwargs = dagon_task_arguments(task_type, task.name, task.config)
+        if task_type == "web" and not task.config.get("python"):
+            # DAGonStar's web runner defaults to a ``python`` executable that
+            # may not exist in a virtualenv-only deployment.
+            kwargs["python"] = sys.executable
+        kwargs.update(overrides.get(task.name, {}))
+        runtime_task = DagonTask(DagonTaskType[task_type.upper()], *args, **kwargs)
+        runtime.add_task(runtime_task)
+        tasks[task.name] = runtime_task
+    for link in workflow.links:
+        if link.kind == LINK_EXPLICIT and link.source_uid in tasks and link.target_uid in tasks:
+            tasks[link.target_uid].add_dependency_to(tasks[link.source_uid])
+    runtime.make_dependencies()
+    return runtime
+
+
+def workflow_config(workflow: Workflow, scratch_dir: Path) -> dict[str, dict[str, Any]]:
+    base = runtime_dagon_config(Path(current_app.config["DAGON_INI_PATH"]), scratch_dir)
+    merged = merge_workflow_dagon_config(base, workflow.dagon_ini)
+    # Per-workflow settings never move task directories out of scratch.
+    merged.setdefault("batch", {}).update({"scratch_dir_base": str(scratch_dir), "remove_dir": False})
+    return merged
+
+
+def export_cwl(workflow: Workflow) -> str:
+    """Return DAGonStar's self-contained CWL v1.2 rendering of a workflow."""
+    root = scratch_root()
+    with tempfile.TemporaryDirectory(dir=root, prefix="cwl-export-") as temporary:
+        export_dir = Path(temporary)
+        with native_modules_importable(workflow, root):
+            runtime = build_runtime_workflow(workflow, workflow_config(workflow, export_dir))
+        target = export_dir / f"{workflow.name}.cwl"
+        runtime.saveAsCWL(str(target))
+        return target.read_text(encoding="utf-8")
+
+
+def run_checkpoint_path(run_dir: Path) -> Path:
+    return safe_child(run_dir, *CHECKPOINT_FILE)
+
+
+def _task_status(task: Any) -> str:
+    return {"RUNNING": RunStatus.RUNNING.value, "FINISHED": RunStatus.SUCCESS.value, "FAILED": RunStatus.FAILED.value}.get(
+        getattr(getattr(task, "status", None), "name", ""), RunStatus.PENDING.value
+    )
+
+
+class TaskFailureCapture(logging.Handler):
+    """Keep the exception DAGonStar logs when one of *these* tasks fails.
+
+    DAGonStar task threads log failures with ``logger.exception`` and do not
+    re-raise; the handler is filtered by thread so concurrent runs never see
+    each other's errors.
+    """
+
+    def __init__(self, tasks: list[Any]) -> None:
+        super().__init__(level=logging.ERROR)
+        self.tasks = {id(task): task for task in tasks}
+        self.failures: dict[str, str] = {}
+
+    def emit(self, record: logging.LogRecord) -> None:
+        task = self.tasks.get(id(threading.current_thread()))
+        if task is None or not record.exc_info or record.exc_info[1] is None:
+            return
+        self.failures[task.name] = str(record.exc_info[1]).strip()[-4000:]
+
+
+def _failure_detail(task: Any, failures: dict[str, str]) -> str:
+    if failures.get(task.name):
+        return failures[task.name]
+    if any(_task_status(previous) == RunStatus.FAILED.value for previous in getattr(task, "prevs", [])):
+        return "skipped because an upstream task failed"
+    result = getattr(task, "result", None)
+    if isinstance(result, dict):
+        message = str(result.get("message") or "").strip()
+        if message:
+            return message[-4000:]
+    return ""
+
+
+def execute_workflow(workflow: Workflow, user_id: int, run: WorkflowRun | None = None, *, resume: bool = False) -> WorkflowRun:
+    """Execute ``workflow`` with DAGonStar and keep ``run`` updated.
+
+    With ``resume=True`` the run directory and DAGonStar checkpoint of an
+    earlier attempt are reused: tasks that completed successfully are
+    skipped by DAGonStar and the others run again.
+    """
+    root = scratch_root()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    if run is None:
+        run_dir = safe_child(root, f"workflow-{workflow.id}", f"run-{stamp}")
+        run = WorkflowRun(workflow_id=workflow.id, user_id=user_id, status=RunStatus.RUNNING.value, scratch_path=str(run_dir), log="")
+        db.session.add(run)
+    else:
+        existing = Path(run.scratch_path).resolve() if run.scratch_path else None
+        run_dir = existing if resume and existing and is_inside(root, existing) else safe_child(root, f"workflow-{workflow.id}", f"run-{run.id}")
+        run.status = RunStatus.RUNNING.value
+        run.scratch_path = str(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint = run_checkpoint_path(run_dir)
+    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    resume_file = str(checkpoint) if resume and checkpoint.is_file() else None
+    run.log = (run.log or "") + timestamped_log("Workflow resumed from checkpoint." if resume_file else "Workflow started.")
+    for task_run in list(run.task_runs):
+        db.session.delete(task_run)
+    db.session.commit()
+    run_id = run.id
+    app = current_app._get_current_object()
+    lock = threading.Lock()
+    capture: TaskFailureCapture | None = None
+    try:
+        overrides = prepare_native_task_environments(workflow, root)
+        with native_modules_importable(workflow, root):
+            runtime = build_runtime_workflow(workflow, workflow_config(workflow, run_dir), checkpoint_file=str(checkpoint), overrides=overrides)
         enable_fair_if_configured(runtime, workflow, run_dir)
-        if module_root:
-            sys.path.remove(str(module_root))
-        task_runs = {task.name: TaskRun(workflow_run_id=run.id, task_uid=task.name, status=RunStatus.PENDING.value, scratch_path=str(run_dir), log="") for task in runtime.tasks}
+        task_runs = {task.name: TaskRun(workflow_run_id=run_id, task_uid=task.name, status=RunStatus.PENDING.value, scratch_path=str(run_dir), log="") for task in runtime.tasks}
         db.session.add_all(task_runs.values())
         db.session.commit()
-        app = current_app._get_current_object()
+        task_run_ids = {name: task_run.id for name, task_run in task_runs.items()}
+        capture = TaskFailureCapture(runtime.tasks)
+        logging.getLogger().addHandler(capture)
 
-        def update_task_status(task: Any) -> None:
-            with app.app_context():
-                task_run = db.session.get(TaskRun, task_runs[task.name].id)
-                if task_run:
-                    status = {"RUNNING": RunStatus.RUNNING.value, "FINISHED": RunStatus.SUCCESS.value, "FAILED": RunStatus.FAILED.value}.get(task.status.name, RunStatus.PENDING.value)
-                    previous_status = task_run.status
-                    task_run.status = status
-                    task_run.scratch_path = task.working_dir or str(run_dir)
-                    if status != previous_status:
-                        event = {RunStatus.RUNNING.value: "started", RunStatus.SUCCESS.value: "completed", RunStatus.FAILED.value: "failed"}.get(status)
-                        if event:
-                            message = timestamped_log(f"Task {task.name} {event}.")
-                            task_run.log = (task_run.log or "") + message
-                            current_run = db.session.get(WorkflowRun, run.id)
-                            if current_run:
-                                current_run.log = (current_run.log or "") + message
-                    db.session.commit()
+        def record(task: Any, event: str | None = None) -> None:
+            """Persist a DAGonStar task event; called from DAGonStar threads."""
+            with lock, app.app_context():
+                task_run = db.session.get(TaskRun, task_run_ids.get(task.name))
+                current_run = db.session.get(WorkflowRun, run_id)
+                if not task_run or not current_run:
+                    return
+                status = _task_status(task)
+                messages = []
+                if event:
+                    messages.append(f"Task {task.name}: {event}.")
+                if status != task_run.status:
+                    verb = {RunStatus.RUNNING.value: "started", RunStatus.SUCCESS.value: "completed", RunStatus.FAILED.value: "failed"}.get(status)
+                    if verb:
+                        messages.append(f"Task {task.name} {verb}.")
+                    detail = _failure_detail(task, capture.failures) if status == RunStatus.FAILED.value else ""
+                    if detail:
+                        messages.append(f"Task {task.name} error: {detail}")
+                task_run.status = status
+                working_dir = getattr(task, "working_dir", None)
+                if working_dir and is_inside(root, Path(working_dir)):
+                    task_run.scratch_path = str(Path(working_dir).resolve())
+                for message in messages:
+                    line = timestamped_log(message)
+                    task_run.log = (task_run.log or "") + line
+                    current_run.log = (current_run.log or "") + line
+                db.session.commit()
 
-        runtime.on_task_start += update_task_status
-        runtime.on_task_end += update_task_status
-        runtime.launch()
+        runtime.on_task_start += lambda task: record(task)
+        runtime.on_task_end += lambda task: record(task)
+        for event_name, label in _TASK_EVENTS.items():
+            runtime.add_listener(event_name, lambda task, label=label: record(task, label))
+        runtime.launch(resume_checkpoint_file=resume_file)
         runtime.wait()
         for runtime_task in runtime.tasks:
-            update_task_status(runtime_task)
+            record(runtime_task)
+        db.session.expire_all()
+        run = db.session.get(WorkflowRun, run_id)
         run.status = RunStatus.SUCCESS.value if all(task.status.name == "FINISHED" for task in runtime.tasks) else RunStatus.FAILED.value
         run.log = (run.log or "") + timestamped_log(f"DAGonStar workflow completed with status: {run.status}.")
     except Exception as exc:
-        if module_root and str(module_root) in sys.path:
-            sys.path.remove(str(module_root))
+        db.session.rollback()
+        run = db.session.get(WorkflowRun, run_id)
         run.status = RunStatus.FAILED.value
         run.log = (run.log or "") + timestamped_log(f"DAGonStar workflow failed: {exc}")
+    finally:
+        if capture is not None:
+            logging.getLogger().removeHandler(capture)
     db.session.commit()
     return run
-
-
-def execute_task(task: Any, task_dir: Path, workflow: Workflow) -> str:
-    config = task.config
-    task_type = LEGACY_TASK_TYPES.get(task.task_type, task.task_type)
-    context = {"TASK_NAME": task.name, "TASK_SCRATCH": str(task_dir), "WORKFLOW_ID": str(workflow.id)}
-    for link in workflow.links:
-        if link.target_uid == task.name:
-            context[f"INPUT_{link.target_input.upper()}"] = link.workflow_uri
-    env = os.environ.copy()
-    env.update(context)
-    metadata = {"task": task.to_dict(), "env": context}
-    (task_dir / "task.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    if task_type == "checkpoint":
-        (task_dir / "checkpoint.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
-        return "Checkpoint metadata written."
-    if task_type == "batch":
-        command = config.get("command", "echo hello from DAGonWeb > output.txt")
-        completed = subprocess.run(command, shell=True, cwd=task_dir, env=env, text=True, capture_output=True, timeout=int(config.get("timeout", 3600)))
-        output = completed.stdout + completed.stderr
-        if completed.returncode:
-            raise RuntimeError(f"Batch task exited with status {completed.returncode}.\n{output}")
-        return output
-    if task_type in {"slurm", "cloud", "docker"}:
-        (task_dir / f"{task_type}_job.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
-        return f"{task_type.title()} job metadata staged. Configure an execution adapter to submit it."
-    if task_type == "native":
-        module_function = config.get("callable", "")
-        (task_dir / "native_result.json").write_text(json.dumps({"callable": module_function, "status": "stubbed"}, indent=2), encoding="utf-8")
-        return "Native DAGonStar-style task metadata written. Install a project-specific callable adapter to execute it."
-    if task_type == "llm":
-        (task_dir / "prompt.json").write_text(json.dumps({"prompt": config.get("prompt", "")}, indent=2), encoding="utf-8")
-        return "LLM task prompt staged. Configure an OpenAI-compatible backend before production execution."
-    if task_type == "web":
-        (task_dir / "web_request.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
-        return "Web request metadata staged. Configure a web execution adapter before production execution."
-    raise RuntimeError(f"Unsupported task type {task_type}")
 
 
 def list_files(path: str) -> list[dict[str, Any]]:

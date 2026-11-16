@@ -1,0 +1,32 @@
+{
+  "dagonweb": {
+    "runtime": {
+      "portable_emulation": true
+    }
+  },
+  "host": "localhost",
+  "id": null,
+  "name": "kubernetes_example",
+  "tasks": {
+    "kubernetes_task": {
+      "command": "echo hello from Kubernetes > output.txt",
+      "dagonweb": {
+        "config": {
+          "command": "echo hello from Kubernetes > output.txt",
+          "image": "ubuntu:22.04",
+          "inputs": {},
+          "namespace": "default"
+        },
+        "x": 160,
+        "y": 160
+      },
+      "explicit_prevs": [],
+      "name": "kubernetes_task",
+      "nexts": [],
+      "prevs": [],
+      "status": "READY",
+      "type": "kubernetes",
+      "working_dir": null
+    }
+  }
+}

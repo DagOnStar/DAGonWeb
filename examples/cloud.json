@@ -1,0 +1,32 @@
+{
+  "dagonweb": {
+    "runtime": {
+      "portable_emulation": true
+    }
+  },
+  "host": "localhost",
+  "id": null,
+  "name": "cloud_example",
+  "tasks": {
+    "cloud_task": {
+      "command": "echo hello from cloud > output.txt",
+      "dagonweb": {
+        "config": {
+          "command": "echo hello from cloud > output.txt",
+          "inputs": {},
+          "provider": "",
+          "ssh_username": "ubuntu"
+        },
+        "x": 160,
+        "y": 160
+      },
+      "explicit_prevs": [],
+      "name": "cloud_task",
+      "nexts": [],
+      "prevs": [],
+      "status": "READY",
+      "type": "cloud",
+      "working_dir": null
+    }
+  }
+}

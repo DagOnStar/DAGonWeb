@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
-from flask import Flask, redirect, url_for
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+
+import click
+from flask import Flask, redirect, send_from_directory, url_for
 from flask_login import current_user
 from .config import Config
 from .dagon_ini import DEFAULT_DAGON_INI
@@ -44,10 +49,43 @@ def create_app(config_object: type[Config] = Config) -> Flask:
             return redirect(url_for("workflows.list_workflows"))
         return redirect(url_for("auth.login"))
 
+    @app.route("/service-worker.js")
+    def service_worker():
+        # Served from the root so the worker's scope covers the whole app.
+        response = send_from_directory(os.path.join(app.static_folder, "js"), "service-worker.js", mimetype="application/javascript", max_age=0)
+        response.headers["Service-Worker-Allowed"] = "/"
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+    try:
+        dagonstar_version = version("dagonstar")
+    except PackageNotFoundError:
+        dagonstar_version = "unknown"
+
+    @app.context_processor
+    def inject_versions() -> dict[str, str]:
+        return {"dagonstar_version": dagonstar_version}
+
     @app.cli.command("seed")
     def seed() -> None:
         seed_defaults(app)
         print("Seeded DAGonWeb defaults")
+
+    @app.cli.command("export-examples")
+    @click.argument("directory", default="examples")
+    def export_examples(directory: str) -> None:
+        """Write one DAGonStar JSON document per built-in template."""
+        from .workflows.routes import template_document, workflow_template_options
+
+        owner = User.query.join(User.roles).filter(Role.name == "admin").first()
+        if owner is None:
+            raise click.ClickException("Run `flask --app wsgi seed` first.")
+        target = Path(directory)
+        target.mkdir(parents=True, exist_ok=True)
+        for key, _label in workflow_template_options():
+            path = target / f"{key}.json"
+            path.write_text(json.dumps(template_document(key, owner.id), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            print(f"Wrote {path}")
 
     return app
 

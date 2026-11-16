@@ -9,6 +9,7 @@ from typing import Any
 from werkzeug.security import check_password_hash, generate_password_hash
 from flask_login import UserMixin
 from .extensions import db
+from .task_specs import TASK_TYPE_LABELS, document_fields
 
 user_roles = db.Table(
     "user_roles",
@@ -17,26 +18,23 @@ user_roles = db.Table(
 )
 
 class TaskType(str, Enum):
+    """DAGonStar 2.9 task types supported by the editor and executor."""
+
     CHECKPOINT = "checkpoint"
     BATCH = "batch"
     SLURM = "slurm"
     CLOUD = "cloud"
     DOCKER = "docker"
+    KUBERNETES = "kubernetes"
+    APPTAINER = "apptainer"
+    NOMAD = "nomad"
     LLM = "llm"
     NATIVE = "native"
     WEB = "web"
+    FAAS = "faas"
+    IOT = "iot"
+    AGENTIC = "agentic"
 
-
-TASK_TYPE_LABELS = {
-    TaskType.CHECKPOINT.value: "Checkpoint",
-    TaskType.BATCH.value: "Batch",
-    TaskType.SLURM.value: "Slurm",
-    TaskType.CLOUD.value: "Cloud",
-    TaskType.DOCKER.value: "Docker",
-    TaskType.LLM.value: "LLM",
-    TaskType.NATIVE.value: "Native",
-    TaskType.WEB.value: "Web",
-}
 
 LEGACY_TASK_TYPES = {"bash": TaskType.BATCH.value, "python": TaskType.BATCH.value}
 
@@ -45,6 +43,11 @@ class RunStatus(str, Enum):
     RUNNING = "running"
     SUCCESS = "success"
     FAILED = "failed"
+
+
+ACTIVE_RUN_STATUSES = {RunStatus.PENDING.value, RunStatus.RUNNING.value}
+LINK_DATA = "data"
+LINK_EXPLICIT = "explicit"
 
 class TimestampMixin:
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -143,60 +146,54 @@ class Workflow(TimestampMixin, db.Model):
         metadata["fair"] = value
         self.dagonweb = metadata
 
+    @property
+    def runtime_options(self) -> dict[str, Any]:
+        """DAGonStar ``Workflow`` options kept in the additive extension."""
+        options = self.dagonweb.get("runtime", {})
+        return options if isinstance(options, dict) else {}
+
+    @runtime_options.setter
+    def runtime_options(self, value: dict[str, Any]) -> None:
+        metadata = self.dagonweb
+        metadata["runtime"] = value
+        self.dagonweb = metadata
+
+    @property
+    def has_active_runs(self) -> bool:
+        return self.runs.filter(WorkflowRun.status.in_(ACTIVE_RUN_STATUSES)).count() > 0
+
     def as_json(self) -> dict[str, Any]:
+        """Return the DAGonStar task-map document for this workflow.
+
+        Native DAGonStar fields follow ``dagon.Workflow.as_json()`` from
+        DAGonStar 2.9; editor state stays in the additive ``dagonweb`` keys.
+        """
         tasks: dict[str, dict[str, Any]] = {}
         for task in self.tasks:
             config = task.config
-            tasks[task.name] = {
+            entry: dict[str, Any] = {
                 "name": task.name,
                 "status": "READY",
                 "working_dir": None,
                 "nexts": [],
                 "prevs": [],
-                "command": config.get("command", ""),
+                "explicit_prevs": [],
+                "command": "",
                 "type": task.normalized_task_type,
-                "dagonweb": {"x": task.x, "y": task.y, "config": config},
             }
-            # DAGonStar's JSON loader receives web-task settings through its
-            # native ``specification`` field.  Keep the editor settings in the
-            # additive DAGonWeb extension too, so exported documents remain
-            # portable and editable by DAGonWeb.
-            if task.normalized_task_type == "web":
-                tasks[task.name]["specification"] = config
-            elif task.normalized_task_type == "llm":
-                # LLM tasks keep their Chat Completions request in ``command``
-                # and their runtime settings at the task level, as expected by
-                # DAGonStar's JSON loader.  The full editor configuration stays
-                # in the additive dagonweb extension above.
-                prompt = config.get("prompt", {})
-                tasks[task.name]["command"] = json.dumps(prompt) if isinstance(prompt, dict) else prompt
-                tasks[task.name].update({
-                    "provider": config.get("provider", ""),
-                    "params": config.get("params", {}),
-                    "input_files": config.get("input_files", config.get("inputs", {})),
-                    "output_file": config.get("output_file", "response.json"),
-                    "timeout": config.get("timeout", 120),
-                })
-            elif task.normalized_task_type == "native":
-                # NativeTask's JSON loader expects its bindings at the task
-                # level, rather than inside DAGonWeb's editor extension.
-                native_settings = {
-                    "function": config.get("callable", ""),
-                    "inputs": config.get("inputs", {}),
-                    "outputs": config.get("outputs", {}),
-                    "executor": config.get("executor", "local"),
-                }
-                native_settings.update({
-                    key: config[key]
-                    for key in ("resources", "python", "environment")
-                    if config.get(key) not in (None, "", {})
-                })
-                tasks[task.name].update(native_settings)
+            entry.update(document_fields(task.normalized_task_type, config))
+            entry["dagonweb"] = {"x": task.x, "y": task.y, "config": config}
+            tasks[task.name] = entry
         for link in self.links:
             if link.source_uid in tasks and link.target_uid in tasks:
-                tasks[link.source_uid]["nexts"].append(link.target_uid)
-                tasks[link.target_uid]["prevs"].append(link.source_uid)
-        document = {"tasks": tasks, "name": self.name, "id": self.id, "host": "localhost"}
+                if link.source_uid not in tasks[link.target_uid]["prevs"]:
+                    tasks[link.source_uid]["nexts"].append(link.target_uid)
+                    tasks[link.target_uid]["prevs"].append(link.source_uid)
+                if link.kind == LINK_EXPLICIT:
+                    tasks[link.target_uid]["explicit_prevs"].append(link.source_uid)
+        document: dict[str, Any] = {"tasks": tasks, "name": self.name, "id": self.id, "host": "localhost"}
+        if self.runtime_options.get("pre_stage"):
+            document["pre_stage"] = True
         if self.dagonweb:
             document["dagonweb"] = self.dagonweb
         return document
@@ -251,9 +248,12 @@ class WorkflowLink(TimestampMixin, db.Model):
     target_uid = db.Column(db.String(80), nullable=False)
     target_input = db.Column(db.String(80), default="input")
     workflow_uri = db.Column(db.String(255), nullable=False)
+    # ``data`` links come from workflow:// references; ``explicit`` links are
+    # DAGonStar ``explicit_prevs`` ordering edges without data staging.
+    kind = db.Column(db.String(20), default=LINK_DATA, nullable=False, server_default=LINK_DATA)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"id": self.id, "source_uid": self.source_uid, "source_output": self.source_output, "target_uid": self.target_uid, "target_input": self.target_input, "workflow_uri": self.workflow_uri}
+        return {"id": self.id, "kind": self.kind, "source_uid": self.source_uid, "source_output": self.source_output, "target_uid": self.target_uid, "target_input": self.target_input, "workflow_uri": self.workflow_uri}
 
 class WorkflowRun(TimestampMixin, db.Model):
     __tablename__ = "workflow_runs"

@@ -1,0 +1,117 @@
+{
+  "host": "localhost",
+  "id": null,
+  "name": "agentic_example",
+  "tasks": {
+    "prepare": {
+      "command": "mkdir -p outputs\nprintf '%s' '{\"observations\": [{\"id\": 1, \"station\": \"SYN001\", \"temperature_c\": 12.0}, {\"id\": 2, \"station\": \"SYN001\", \"temperature_c\": 14.0}, {\"id\": 2, \"station\": \"SYN001\", \"temperature_c\": 14.0}, {\"id\": 3, \"station\": \"SYN002\", \"temperature_c\": 11.5}, {\"id\": 4, \"station\": \"SYN002\", \"temperature_c\": 13.5}]}' > outputs/observations.json",
+      "dagonweb": {
+        "config": {
+          "command": "mkdir -p outputs\nprintf '%s' '{\"observations\": [{\"id\": 1, \"station\": \"SYN001\", \"temperature_c\": 12.0}, {\"id\": 2, \"station\": \"SYN001\", \"temperature_c\": 14.0}, {\"id\": 2, \"station\": \"SYN001\", \"temperature_c\": 14.0}, {\"id\": 3, \"station\": \"SYN002\", \"temperature_c\": 11.5}, {\"id\": 4, \"station\": \"SYN002\", \"temperature_c\": 13.5}]}' > outputs/observations.json",
+          "inputs": {}
+        },
+        "x": 120,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "prepare",
+      "nexts": [
+        "quality_control"
+      ],
+      "prevs": [],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "quality_control": {
+      "agentic": {
+        "agent": "quality-local",
+        "evaluation": {
+          "aggregation": "weighted_mean",
+          "threshold": 1.0
+        },
+        "inputs": {
+          "source": "workflow:///prepare/outputs/observations.json"
+        },
+        "outputs": {
+          "evaluation": "outputs/evaluation.json",
+          "result": "outputs/result.json"
+        },
+        "requirements": [
+          {
+            "description": "All expected records are present",
+            "evaluator": "record_coverage",
+            "expected": {
+              "count": 4
+            },
+            "id": "completeness",
+            "mandatory": true,
+            "minimum_score": 1.0,
+            "weight": 1.0
+          }
+        ],
+        "specification": {
+          "objective": "Produce a complete, validated observation table",
+          "output_schema": {
+            "required": [
+              "observations"
+            ],
+            "type": "object"
+          },
+          "schema_version": 1
+        }
+      },
+      "command": null,
+      "dagonweb": {
+        "config": {
+          "agent": "quality-local",
+          "evaluation": {
+            "aggregation": "weighted_mean",
+            "threshold": 1.0
+          },
+          "inputs": {
+            "source": "workflow:///prepare/outputs/observations.json"
+          },
+          "outputs": {
+            "evaluation": "outputs/evaluation.json",
+            "result": "outputs/result.json"
+          },
+          "requirements": [
+            {
+              "description": "All expected records are present",
+              "evaluator": "record_coverage",
+              "expected": {
+                "count": 4
+              },
+              "id": "completeness",
+              "mandatory": true,
+              "minimum_score": 1.0,
+              "weight": 1.0
+            }
+          ],
+          "specification": {
+            "objective": "Produce a complete, validated observation table",
+            "output_schema": {
+              "required": [
+                "observations"
+              ],
+              "type": "object"
+            },
+            "schema_version": 1
+          }
+        },
+        "x": 420,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "quality_control",
+      "nexts": [],
+      "prevs": [
+        "prepare"
+      ],
+      "status": "READY",
+      "type": "agentic",
+      "working_dir": null
+    }
+  }
+}

@@ -1,0 +1,113 @@
+{
+  "host": "localhost",
+  "id": null,
+  "name": "faas_example",
+  "tasks": {
+    "consume": {
+      "command": "cat workflow:///invoke/outputs/result.json > summary.json",
+      "dagonweb": {
+        "config": {
+          "command": "cat workflow:///invoke/outputs/result.json > summary.json",
+          "inputs": {}
+        },
+        "x": 680,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "consume",
+      "nexts": [],
+      "prevs": [
+        "invoke"
+      ],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "invoke": {
+      "command": "",
+      "dagonweb": {
+        "config": {
+          "function": "double-value",
+          "inputs": {
+            "request": {
+              "document": "workflow:///prepare/outputs/input.json"
+            }
+          },
+          "invocation": "sync",
+          "outputs": {
+            "result": "result.json"
+          },
+          "provider": "mock",
+          "provider_options": {
+            "mock": {
+              "response": {
+                "outputs": {
+                  "result": {
+                    "value": 8
+                  }
+                },
+                "status": "succeeded"
+              }
+            }
+          }
+        },
+        "x": 400,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "function": "double-value",
+      "inputs": {
+        "request": {
+          "document": "workflow:///prepare/outputs/input.json"
+        }
+      },
+      "invocation": "sync",
+      "name": "invoke",
+      "nexts": [
+        "consume"
+      ],
+      "outputs": {
+        "result": "result.json"
+      },
+      "prevs": [
+        "prepare"
+      ],
+      "provider": "mock",
+      "provider_options": {
+        "mock": {
+          "response": {
+            "outputs": {
+              "result": {
+                "value": 8
+              }
+            },
+            "status": "succeeded"
+          }
+        }
+      },
+      "status": "READY",
+      "type": "faas",
+      "working_dir": null
+    },
+    "prepare": {
+      "command": "mkdir -p outputs\nprintf '{\"value\": 4}' > outputs/input.json",
+      "dagonweb": {
+        "config": {
+          "command": "mkdir -p outputs\nprintf '{\"value\": 4}' > outputs/input.json",
+          "inputs": {}
+        },
+        "x": 120,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "prepare",
+      "nexts": [
+        "invoke"
+      ],
+      "prevs": [],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    }
+  }
+}

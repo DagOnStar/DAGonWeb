@@ -2,8 +2,10 @@
 
 {% block content %}
 <div class="row justify-content-center">
-  <div class="col-lg-7">
-    <h1 class="h3">{{ title or 'Workflow' }}</h1>
+  <div class="col-lg-8 col-xl-7">
+    <div class="page-header">
+      <div><h1 class="h3">{{ title or 'Workflow' }}</h1>{% if workflow %}<p class="page-subtitle"><a href="{{ url_for('workflows.editor', workflow_id=workflow.id) }}">{{ workflow.name }}</a></p>{% endif %}</div>
+    </div>
     <form method="post" class="card card-body">
       {{ form.hidden_tag() }}
       <div class="mb-3">
@@ -45,8 +47,32 @@
             </div>
           </div>
         </div>
+        <h2 class="h5 mt-4">DAGonStar runtime</h2>
+        <div class="row g-3">
+          <div class="col-md-4">
+            {{ form.max_threads.label(class='form-label') }}
+            {{ form.max_threads(class='form-control') }}
+            <div class="form-text">DAGonStar <code>max_threads</code>: tasks that may run at once.</div>
+            {% for error in form.max_threads.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+          </div>
+          <div class="col-md-8">
+            <div class="form-check form-switch mb-2">
+              {{ form.portable_emulation(class='form-check-input', role='switch') }}
+              {{ form.portable_emulation.label(class='form-check-label') }}
+              <div class="form-text">DAGonStar <code>portable_emulation</code>: Docker, Kubernetes, Apptainer, Nomad, Slurm, Cloud and LLM tasks run their command locally without contacting the back-end. Useful for demos and tests.</div>
+            </div>
+            <div class="form-check form-switch">
+              {{ form.pre_stage(class='form-check-input', role='switch') }}
+              {{ form.pre_stage.label(class='form-check-label') }}
+              <div class="form-text">DAGonStar <code>pre_stage</code>: Slurm tasks stage <code>workflow://</code> inputs before requesting resources. Tasks can override it.</div>
+            </div>
+          </div>
+        </div>
+        <p class="small text-body-secondary mt-2 mb-0">Every run records a DAGonStar checkpoint, so a failed run can be resumed from the run page.</p>
         <details class="mt-4">
           <summary>Advanced dagon.ini text</summary>
+          {% if dagon_ini_preview %}<p class="small text-body-secondary mt-2 mb-1">Current per-workflow settings (agent profiles and providers are kept when you save the guided form):</p><pre class="file-preview mono small">{{ dagon_ini_preview }}</pre>{% endif %}
+          <p class="small text-body-secondary mt-2 mb-1">Paste a complete INI document to replace the per-workflow settings. <code>[batch] scratch_dir_base</code> is always forced into the run directory.</p>
           <div class="mt-3">
             {{ form.dagon_ini_content(class='form-control font-monospace', rows=10) }}
             {% for error in form.dagon_ini_content.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}

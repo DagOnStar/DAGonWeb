@@ -1,12 +1,42 @@
 # Workflow API
 
-All workflow endpoints require an authenticated user and enforce ownership or administrator access.
+All workflow endpoints need a signed-in user. They allow a request only from the workflow's owner or an administrator. Public workflows can also be read and run by other signed-in users. JSON mutations need the `X-CSRFToken` header; form posts need the `csrf_token` field.
 
-- `GET /workflows/<id>/graph` returns the DAGonStar workflow document.
-- `POST /workflows/<id>/graph` saves that document.
-- `GET /workflows/<id>/download` downloads JSON.
-- `POST /workflows/upload` imports DAGonStar JSON.
-- `GET /workflows/<id>/python` downloads generated DAGonStar Python source.
-- `GET /workflows/<id>/runs/<run>/status` returns the persisted live run/task statuses.
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/workflows/<id>/graph` | Return the DAGonStar task-map document. |
+| `POST` | `/workflows/<id>/graph` | Validate and save a document. Links are rebuilt from `workflow:///` references and `explicit_prevs`. |
+| `GET` | `/workflows/<id>/download` | Download the document as JSON. |
+| `POST` | `/workflows/upload` | Import a DAGonStar JSON document as a new workflow. |
+| `GET` | `/workflows/<id>/python` | Download a standalone DAGonStar Python program. It supports `--resume`. |
+| `GET` | `/workflows/<id>/cwl` | Download a CWL v1.2 export produced by DAGonStar `saveAsCWL`. |
+| `POST` | `/workflows/<id>/run` | Start an asynchronous run. Empty workflows are rejected. |
+| `POST` | `/workflows/runs/<run>/resume` | Resume a failed run from its DAGonStar checkpoint. |
+| `GET` | `/workflows/<id>/runs/<run>/status` | Return the run and task statuses, logs, timestamps, and `can_resume`. |
+| `GET` | `/workflows/task-runs/<task_run>/files?path=` | List a directory inside the task's scratch directory. |
+| `GET` | `/workflows/task-runs/<task_run>/file?path=` | Return a structured preview of a file (text, JSON, CSV, GeoJSON, NetCDF). |
+| `GET` | `/workflows/task-runs/<task_run>/download?path=` | Download one file. |
+| `GET` | `/workflows/task-runs/<task_run>/archive` | Download the task's scratch directory as a ZIP archive. |
 
-The graph document uses `tasks` keyed by task name. Each task has DAGonStar fields such as `type`, `command`, `nexts`, and `prevs`; editor position and configuration are stored under the additive `dagonweb` object. Imports ignore `nexts`/`prevs` and infer local links from `workflow:///producer/path` and `workflow://current_workflow/producer/path` references. References to other workflow names are preserved in task configuration but are not rendered as local graph links.
+## Document format
+
+The document uses `tasks` keyed by task name. Each task has the fields that DAGonStar 2.9 writes in `Workflow.as_json()`:
+
+- Common fields: `name`, `type`, `command`, `prevs`, `nexts`, `explicit_prevs`, `status`, `working_dir`.
+- The fields of its own task type, for example `image` for Docker, `partition` and `time` for Slurm, `callable` for Native, or `specification` for Web and FaaS.
+
+A top-level `pre_stage` is written when scheduler-aware pre-staging is enabled.
+
+DAGonWeb-only state lives in additive `dagonweb` objects:
+
+- Per task: `dagonweb.x`, `dagonweb.y` and `dagonweb.config`.
+- At workflow level: `dagonweb.runtime` (`portable_emulation`, `pre_stage`, `max_threads`) and `dagonweb.fair`.
+
+On import, `prevs` and `nexts` are ignored. Local links are inferred in two ways:
+
+- **Data links** come from `workflow:///producer/path` and `workflow://<current workflow>/producer/path` references.
+- **Explicit dependencies** come from `explicit_prevs`. A plain DAGonStar document without `explicit_prevs` treats its legacy `prevs` as explicit edges, the same way DAGonStar does.
+
+References to other workflow names stay in the task configuration but do not create local links. Unknown tasks, self references, and cycles are rejected; a cycle error names the tasks in the cycle.
+
+The files in [examples/](../examples) are valid documents for every task type.
