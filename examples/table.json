@@ -1,0 +1,52 @@
+{
+  "host": "localhost",
+  "id": null,
+  "name": "table_example",
+  "tasks": {
+    "make_table": {
+      "command": "{\nset -e\nsource=workflow:///measure/outputs/measurements.csv ;\nmkdir -p outputs\n\"${DAGONWEB_PYTHON:-python3}\" - \"$source\" outputs 'Monthly measurements' '' 1000 <<'DAGONWEB_PY'\nimport csv, json, sys\nfrom pathlib import Path\n\n\ndef load_rows(path):\n    \"\"\"Return (columns, rows) from a CSV, TSV or JSON file.\"\"\"\n    source = Path(path)\n    text = source.read_text(encoding=\"utf-8\")\n    if source.suffix.lower() in (\".csv\", \".tsv\", \".txt\"):\n        delimiter = \"\\t\" if source.suffix.lower() == \".tsv\" else \",\"\n        reader = csv.DictReader(text.splitlines(), delimiter=delimiter)\n        rows = [dict(row) for row in reader]\n        return list(reader.fieldnames or []), rows\n    value = json.loads(text)\n    if isinstance(value, dict):\n        if isinstance(value.get(\"rows\"), list):\n            value = value[\"rows\"]\n        elif all(isinstance(item, list) for item in value.values()) and value:\n            keys = list(value)\n            length = max(len(item) for item in value.values())\n            value = [{key: (value[key][i] if i < len(value[key]) else None) for key in keys} for i in range(length)]\n        else:\n            lists = [item for item in value.values() if isinstance(item, list)]\n            value = lists[0] if len(lists) == 1 else [value]\n    if not isinstance(value, list):\n        value = [value]\n    rows = [row if isinstance(row, dict) else {\"value\": row} for row in value]\n    columns = []\n    for row in rows:\n        for key in row:\n            if key not in columns:\n                columns.append(key)\n    return columns, rows\n\n\ndef number(value):\n    try:\n        return float(value)\n    except (TypeError, ValueError):\n        return None\n\nimport html\n\nsource, out_dir, title, wanted, limit = sys.argv[1], Path(sys.argv[2]), sys.argv[3], sys.argv[4], int(sys.argv[5] or 1000)\ncolumns, rows = load_rows(source)\nif wanted.strip():\n    columns = [c.strip() for c in wanted.split(\",\") if c.strip()]\nrows = [[row.get(c) for c in columns] for row in rows[:limit]]\nout_dir.mkdir(parents=True, exist_ok=True)\n(out_dir / \"table.json\").write_text(json.dumps({\"title\": title, \"columns\": columns, \"rows\": rows}, indent=2, default=str), encoding=\"utf-8\")\nwith (out_dir / \"table.csv\").open(\"w\", newline=\"\", encoding=\"utf-8\") as handle:\n    writer = csv.writer(handle)\n    writer.writerow(columns)\n    writer.writerows(rows)\ncells = \"\".join(\"<tr>\" + \"\".join(f\"<td>{html.escape(str(v if v is not None else ''))}</td>\" for v in row) + \"</tr>\" for row in rows)\nhead = \"\".join(f\"<th>{html.escape(str(c))}</th>\" for c in columns)\n(out_dir / \"table.html\").write_text(f\"<!doctype html><meta charset='utf-8'><title>{html.escape(title)}</title><h1>{html.escape(title)}</h1><table border='1'><thead><tr>{head}</tr></thead><tbody>{cells}</tbody></table>\\n\", encoding=\"utf-8\")\nprint(f\"Table with {len(rows)} rows and {len(columns)} columns written to {out_dir}/table.json\")\nDAGONWEB_PY\n}",
+      "dagonweb": {
+        "config": {
+          "columns": [],
+          "inputs": {
+            "source": "workflow:///measure/outputs/measurements.csv"
+          },
+          "max_rows": 1000,
+          "title": "Monthly measurements"
+        },
+        "task_type": "table",
+        "x": 400,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "make_table",
+      "nexts": [],
+      "prevs": [
+        "measure"
+      ],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "measure": {
+      "command": "mkdir -p outputs\ncat > outputs/measurements.csv <<'CSV'\nmonth,rainfall_mm,temperature_c\nJan,98,10.4\nFeb,82,11.0\nMar,74,13.1\nApr,66,15.6\nMay,42,19.8\nJun,19,24.0\nCSV\nwc -l outputs/measurements.csv",
+      "dagonweb": {
+        "config": {
+          "command": "mkdir -p outputs\ncat > outputs/measurements.csv <<'CSV'\nmonth,rainfall_mm,temperature_c\nJan,98,10.4\nFeb,82,11.0\nMar,74,13.1\nApr,66,15.6\nMay,42,19.8\nJun,19,24.0\nCSV\nwc -l outputs/measurements.csv",
+          "inputs": {}
+        },
+        "x": 120,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "measure",
+      "nexts": [
+        "make_table"
+      ],
+      "prevs": [],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    }
+  }
+}

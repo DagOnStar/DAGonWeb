@@ -1,0 +1,55 @@
+{
+  "host": "localhost",
+  "id": null,
+  "name": "chart_example",
+  "tasks": {
+    "make_chart": {
+      "command": "{\nset -e\nsource=workflow:///measure/outputs/measurements.csv ;\nmkdir -p outputs\n\"${DAGONWEB_PYTHON:-python3}\" - \"$source\" outputs line month temperature_c 'Temperature by month' <<'DAGONWEB_PY'\nimport csv, json, sys\nfrom pathlib import Path\n\n\ndef load_rows(path):\n    \"\"\"Return (columns, rows) from a CSV, TSV or JSON file.\"\"\"\n    source = Path(path)\n    text = source.read_text(encoding=\"utf-8\")\n    if source.suffix.lower() in (\".csv\", \".tsv\", \".txt\"):\n        delimiter = \"\\t\" if source.suffix.lower() == \".tsv\" else \",\"\n        reader = csv.DictReader(text.splitlines(), delimiter=delimiter)\n        rows = [dict(row) for row in reader]\n        return list(reader.fieldnames or []), rows\n    value = json.loads(text)\n    if isinstance(value, dict):\n        if isinstance(value.get(\"rows\"), list):\n            value = value[\"rows\"]\n        elif all(isinstance(item, list) for item in value.values()) and value:\n            keys = list(value)\n            length = max(len(item) for item in value.values())\n            value = [{key: (value[key][i] if i < len(value[key]) else None) for key in keys} for i in range(length)]\n        else:\n            lists = [item for item in value.values() if isinstance(item, list)]\n            value = lists[0] if len(lists) == 1 else [value]\n    if not isinstance(value, list):\n        value = [value]\n    rows = [row if isinstance(row, dict) else {\"value\": row} for row in value]\n    columns = []\n    for row in rows:\n        for key in row:\n            if key not in columns:\n                columns.append(key)\n    return columns, rows\n\n\ndef number(value):\n    try:\n        return float(value)\n    except (TypeError, ValueError):\n        return None\n\nimport html, math\n\nsource, out_dir, kind, x_key, y_keys, title = sys.argv[1], Path(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]\ncolumns, rows = load_rows(source)\nx_key = x_key or (columns[0] if columns else \"\")\ny_list = [c.strip() for c in y_keys.split(\",\") if c.strip()] or [c for c in columns if c != x_key and any(number(r.get(c)) is not None for r in rows)][:4]\nlabels = [str(row.get(x_key, i)) for i, row in enumerate(rows)]\nseries = [{\"name\": y, \"values\": [number(row.get(y)) for row in rows]} for y in y_list]\nspec = {\"type\": kind, \"title\": title, \"x\": x_key, \"labels\": labels, \"series\": series}\nout_dir.mkdir(parents=True, exist_ok=True)\n(out_dir / \"chart.json\").write_text(json.dumps(spec, indent=2), encoding=\"utf-8\")\n\nW, H, L, T, R, B = 720, 400, 60, 40, 20, 50\npalette = [\"#2457d6\", \"#c2410c\", \"#0f8a7e\", \"#7a4fd0\", \"#b07a12\", \"#d63343\"]\nparts = [f'<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {W} {H}\" font-family=\"sans-serif\" font-size=\"11\">',\n         f'<rect width=\"{W}\" height=\"{H}\" fill=\"#fff\"/><text x=\"{W/2}\" y=\"22\" text-anchor=\"middle\" font-size=\"15\">{html.escape(title)}</text>']\nvalues = [v for s in series for v in s[\"values\"] if v is not None]\nif kind == \"pie\" and series:\n    total = sum(v for v in series[0][\"values\"] if v and v > 0) or 1\n    angle, cx, cy, r = -math.pi / 2, W / 2 - 80, H / 2 + 10, 140\n    for i, (label, value) in enumerate(zip(labels, series[0][\"values\"])):\n        if not value or value <= 0:\n            continue\n        step = 2 * math.pi * value / total\n        x1, y1 = cx + r * math.cos(angle), cy + r * math.sin(angle)\n        x2, y2 = cx + r * math.cos(angle + step), cy + r * math.sin(angle + step)\n        large = 1 if step > math.pi else 0\n        parts.append(f'<path d=\"M{cx},{cy} L{x1:.1f},{y1:.1f} A{r},{r} 0 {large} 1 {x2:.1f},{y2:.1f} Z\" fill=\"{palette[i % len(palette)]}\"/>')\n        parts.append(f'<rect x=\"{W-200}\" y=\"{50 + i * 18}\" width=\"10\" height=\"10\" fill=\"{palette[i % len(palette)]}\"/><text x=\"{W-185}\" y=\"{59 + i * 18}\">{html.escape(label)} ({value:g})</text>')\n        angle += step\nelif values:\n    low, high = min(0.0, min(values)), max(values)\n    high = high if high > low else low + 1\n    plot_w, plot_h = W - L - R, H - T - B\n    count = max(1, len(labels))\n    sx = lambda i: L + (i + 0.5) * plot_w / count\n    sy = lambda v: T + plot_h - (v - low) / (high - low) * plot_h\n    parts.append(f'<line x1=\"{L}\" y1=\"{T + plot_h}\" x2=\"{W - R}\" y2=\"{T + plot_h}\" stroke=\"#888\"/><line x1=\"{L}\" y1=\"{T}\" x2=\"{L}\" y2=\"{T + plot_h}\" stroke=\"#888\"/>')\n    for tick in range(5):\n        v = low + (high - low) * tick / 4\n        parts.append(f'<text x=\"{L - 6}\" y=\"{sy(v) + 4:.1f}\" text-anchor=\"end\">{v:.3g}</text>')\n    stride = max(1, count // 12)\n    for i, label in enumerate(labels):\n        if i % stride == 0:\n            parts.append(f'<text x=\"{sx(i):.1f}\" y=\"{T + plot_h + 16}\" text-anchor=\"middle\">{html.escape(label[:12])}</text>')\n    bar_w = plot_w / count / max(1, len(series)) * 0.8\n    for k, s in enumerate(series):\n        color = palette[k % len(palette)]\n        points = [(sx(i), sy(v)) for i, v in enumerate(s[\"values\"]) if v is not None]\n        if kind == \"bar\":\n            for i, v in enumerate(s[\"values\"]):\n                if v is not None:\n                    x = sx(i) - bar_w * len(series) / 2 + k * bar_w\n                    parts.append(f'<rect x=\"{x:.1f}\" y=\"{min(sy(v), sy(0)):.1f}\" width=\"{bar_w:.1f}\" height=\"{abs(sy(0) - sy(v)):.1f}\" fill=\"{color}\"/>')\n        elif kind == \"line\" and points:\n            parts.append('<polyline fill=\"none\" stroke=\"%s\" stroke-width=\"2\" points=\"%s\"/>' % (color, \" \".join(f\"{x:.1f},{y:.1f}\" for x, y in points)))\n        else:\n            parts.extend(f'<circle cx=\"{x:.1f}\" cy=\"{y:.1f}\" r=\"3\" fill=\"{color}\"/>' for x, y in points)\n        parts.append(f'<rect x=\"{L + 10 + k * 120}\" y=\"{H - 16}\" width=\"10\" height=\"10\" fill=\"{color}\"/><text x=\"{L + 24 + k * 120}\" y=\"{H - 7}\">{html.escape(s[\"name\"])}</text>')\nparts.append(\"</svg>\")\n(out_dir / \"chart.svg\").write_text(\"\".join(parts) + \"\\n\", encoding=\"utf-8\")\nprint(f\"{kind} chart with {len(series)} series written to {out_dir}/chart.json and chart.svg\")\nDAGONWEB_PY\n}",
+      "dagonweb": {
+        "config": {
+          "chart_type": "line",
+          "inputs": {
+            "source": "workflow:///measure/outputs/measurements.csv"
+          },
+          "title": "Temperature by month",
+          "x": "month",
+          "y": [
+            "temperature_c"
+          ]
+        },
+        "task_type": "chart",
+        "x": 400,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "make_chart",
+      "nexts": [],
+      "prevs": [
+        "measure"
+      ],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "measure": {
+      "command": "mkdir -p outputs\ncat > outputs/measurements.csv <<'CSV'\nmonth,rainfall_mm,temperature_c\nJan,98,10.4\nFeb,82,11.0\nMar,74,13.1\nApr,66,15.6\nMay,42,19.8\nJun,19,24.0\nCSV\nwc -l outputs/measurements.csv",
+      "dagonweb": {
+        "config": {
+          "command": "mkdir -p outputs\ncat > outputs/measurements.csv <<'CSV'\nmonth,rainfall_mm,temperature_c\nJan,98,10.4\nFeb,82,11.0\nMar,74,13.1\nApr,66,15.6\nMay,42,19.8\nJun,19,24.0\nCSV\nwc -l outputs/measurements.csv",
+          "inputs": {}
+        },
+        "x": 120,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "measure",
+      "nexts": [
+        "make_chart"
+      ],
+      "prevs": [],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    }
+  }
+}

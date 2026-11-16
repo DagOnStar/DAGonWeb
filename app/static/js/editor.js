@@ -101,6 +101,15 @@
     if (task.task_type === 'native' || task.task_type === 'faas') addValues(config.outputs, 'outputs/');
     if (['iot', 'agentic', 'web'].includes(task.task_type)) addValues(config.outputs);
     if (task.task_type === 'llm' && config.output_file) files.add(config.output_file);
+    // DAGonWeb interactive kinds always write these files.
+    const fixed = {
+      upload: config.multiple ? [] : [`outputs/${config.save_as || 'data.csv'}`],
+      form: ['outputs/form.json', 'outputs/form.env'],
+      table: ['outputs/table.json', 'outputs/table.csv', 'outputs/table.html'],
+      chart: ['outputs/chart.json', 'outputs/chart.svg'],
+      download: [`outputs/${config.archive || 'results.zip'}`],
+    }[task.task_type] || [];
+    fixed.forEach(file => files.add(file));
     if (COMMAND_TYPES.has(task.task_type)) {
       for (const match of String(config.command || '').matchAll(/>{1,2}\s*([A-Za-z0-9_.\/-]+)/g)) {
         if (PATH_RE.test(match[1])) files.add(match[1]);
@@ -133,7 +142,7 @@
       dagonweb: document.dagonweb,
       tasks: Object.values(document.tasks || {}).map(task => ({
         name: task.name,
-        task_type: task.type,
+        task_type: task.dagonweb?.task_type || task.type,
         x: task.dagonweb?.x ?? 100,
         y: task.dagonweb?.y ?? 100,
         config: task.dagonweb?.config ?? {},
@@ -1011,6 +1020,20 @@
     const saved = Number(localStorage.getItem('dagonweb.inspector-width'));
     if (saved) setInspectorWidth(saved);
   } catch { /* ignore */ }
+
+  // Hooks for the workflow assistant (assistant.js).
+  window.DAGonWebEditor = {
+    editable,
+    getDocument: () => toDocument(),
+    async applyDocument(document) {
+      if (!editable) return false;
+      fromDocument({ ...document, name: graph.name, id: graph.id, dagonweb: graph.dagonweb });
+      render();
+      showEmptyInspector();
+      requestAnimationFrame(() => fit(false));
+      return save();
+    },
+  };
 
   showEmptyInspector();
   load();

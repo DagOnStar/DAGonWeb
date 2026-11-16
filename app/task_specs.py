@@ -20,6 +20,8 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Any
 
+from .interactive import interactive_command
+
 WORKFLOW_REFERENCE = re.compile(
     r"workflow://(?P<workflow>[A-Za-z0-9_-]{0,80})/(?P<task>[A-Za-z0-9_-]{1,80})/(?P<path>[^\s;|&<>()]+)"
 )
@@ -35,6 +37,7 @@ CATEGORIES = [
     ("containers", "Containers & orchestrators"),
     ("services", "Cloud, web & devices"),
     ("python_ai", "Python & AI"),
+    ("interactive", "DAGonWeb interactive"),
 ]
 
 
@@ -49,6 +52,17 @@ class TaskSpec:
     default_config: dict[str, Any]
     fields: list[dict[str, Any]] = field(default_factory=list)
     docs: str = ""
+    # DAGonStar ``TaskType`` that executes the task. DAGonWeb interactive
+    # types run as ``batch``; every other type is its own DAGonStar type.
+    dagon_type: str = ""
+
+    @property
+    def runtime_type(self) -> str:
+        return self.dagon_type or self.type
+
+    @property
+    def interactive(self) -> bool:
+        return self.runtime_type != self.type
 
     def public(self) -> dict[str, Any]:
         return {
@@ -61,6 +75,8 @@ class TaskSpec:
             "default_config": self.default_config,
             "fields": self.fields,
             "docs": self.docs,
+            "dagon_type": self.runtime_type,
+            "interactive": self.interactive,
         }
 
 
@@ -419,8 +435,108 @@ TASK_SPECS: dict[str, TaskSpec] = {
                 PRE_STAGE_FIELD,
             ],
         ),
+        TaskSpec(
+            "upload",
+            "Upload data",
+            "interactive",
+            "Waits for a user to upload files on the run page.",
+            "⇪",
+            "upload_data",
+            {"description": "Upload the input data set.", "accept": ".csv,.tsv,.json,.txt", "save_as": "data.csv", "multiple": False, "max_mb": 50, "timeout_minutes": 60},
+            [
+                _f("description", "Instructions", "textarea", help="Shown to the user on the run page."),
+                _f("accept", "Accepted file types", placeholder=".csv,.json", help="Comma-separated extensions or MIME types."),
+                _f("save_as", "Save as", help="File name under <code>outputs/</code> for a single upload. Downstream tasks use <code>workflow:///task/outputs/&lt;name&gt;</code>."),
+                _f("multiple", "Allow several files (keeps original names)", "checkbox", default=False),
+                _f("max_mb", "Maximum size (MB)", "integer"),
+                _f("timeout_minutes", "Wait at most (minutes)", "integer", advanced=True),
+            ],
+            docs="DAGonWeb extension: runs as a DAGonStar Batch task that waits for the upload.",
+            dagon_type="batch",
+        ),
+        TaskSpec(
+            "form",
+            "Fill form",
+            "interactive",
+            "Waits for a user to fill a form; writes form.json and form.env.",
+            "☑",
+            "fill_form",
+            {
+                "description": "Choose the run parameters.",
+                "fields": [
+                    {"name": "threshold", "label": "Threshold", "type": "number", "default": 0.5, "required": True},
+                    {"name": "label", "label": "Label", "type": "text", "default": "experiment"},
+                ],
+                "timeout_minutes": 60,
+            },
+            [
+                _f("description", "Instructions", "textarea"),
+                _f("fields", "Form fields (JSON list)", "json", help="Each field: <code>name</code>, <code>label</code>, <code>type</code> (text, textarea, number, integer, boolean, select, date, email), <code>default</code>, <code>required</code>, <code>options</code>."),
+                _f("timeout_minutes", "Wait at most (minutes)", "integer", advanced=True),
+            ],
+            docs="DAGonWeb extension: outputs/form.json (values) and outputs/form.env (export NAME=value).",
+            dagon_type="batch",
+        ),
+        TaskSpec(
+            "table",
+            "Produce table",
+            "interactive",
+            "Renders a CSV/TSV/JSON input as a table on the run page.",
+            "▤",
+            "make_table",
+            {"title": "Results", "columns": [], "max_rows": 1000, "inputs": {}},
+            [
+                _f("inputs", "Source", "mapping", help="<code>source = workflow:///task/file.csv</code> (CSV, TSV or JSON)."),
+                _f("title", "Title"),
+                _f("columns", "Columns", "list", help="Leave empty to keep every column."),
+                _f("max_rows", "Maximum rows", "integer"),
+            ],
+            docs="DAGonWeb extension: outputs/table.json, table.csv and table.html.",
+            dagon_type="batch",
+        ),
+        TaskSpec(
+            "chart",
+            "Produce chart",
+            "interactive",
+            "Plots a CSV/TSV/JSON input; the run page renders the chart.",
+            "◔",
+            "make_chart",
+            {"title": "Chart", "chart_type": "bar", "x": "", "y": [], "inputs": {}},
+            [
+                _f("inputs", "Source", "mapping", help="<code>source = workflow:///task/file.csv</code> (CSV, TSV or JSON)."),
+                _f("title", "Title"),
+                _f("chart_type", "Chart type", "select", options=["bar", "line", "scatter", "pie"]),
+                _f("x", "X column", help="Leave empty to use the first column."),
+                _f("y", "Y columns", "list", help="Leave empty to plot every numeric column."),
+            ],
+            docs="DAGonWeb extension: outputs/chart.json and a dependency-free outputs/chart.svg.",
+            dagon_type="batch",
+        ),
+        TaskSpec(
+            "download",
+            "Download data",
+            "interactive",
+            "Packs its inputs into a ZIP offered for download on the run page.",
+            "⇩",
+            "download_results",
+            {"archive": "results.zip", "inputs": {}},
+            [
+                _f("inputs", "Files to include", "mapping", help="<code>name = workflow:///task/path</code>; folders are included recursively."),
+                _f("archive", "Archive name"),
+            ],
+            docs="DAGonWeb extension: outputs/<archive>.",
+            dagon_type="batch",
+        ),
     ]
 }
+
+INTERACTIVE_TASK_TYPES = frozenset(key for key, spec in TASK_SPECS.items() if spec.interactive)
+
+
+def runtime_type(task_type: str) -> str:
+    """Return the DAGonStar ``TaskType`` value that executes ``task_type``."""
+    spec = TASK_SPECS.get(task_type)
+    return spec.runtime_type if spec else task_type
 
 TASK_TYPE_LABELS: dict[str, str] = {task_type: spec.label for task_type, spec in TASK_SPECS.items()}
 
@@ -512,6 +628,17 @@ def runtime_command(task_type: str, config: dict[str, Any]) -> str:
     return normalize_command_references(body)
 
 
+def interactive_runtime_command(task_type: str, name: str, config: dict[str, Any]) -> str:
+    """Batch script for a DAGonWeb interactive task: inputs, then its body."""
+    inputs = config.get("inputs") if task_type in ("table", "chart", "download") else None
+    assignments = _input_assignments(inputs or {})
+    body = interactive_command(task_type, name, config)
+    script = f"{assignments}\n{body}" if assignments else body
+    # DAGonStar appends ``| tee stdout.txt`` to the last line: a brace group
+    # keeps heredocs intact and ``set -e`` makes any failing step fail the task.
+    return normalize_command_references("{\nset -e\n" + script + "\n}")
+
+
 def _dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
@@ -539,6 +666,8 @@ def dagon_task_arguments(task_type: str, name: str, config: dict[str, Any]) -> t
     out so DAGonStar keeps its own defaults.
     """
     config = config or {}
+    if task_type in INTERACTIVE_TASK_TYPES:
+        return [name, interactive_runtime_command(task_type, name, config)], {}
     if task_type in COMMAND_TYPES:
         args: list[Any] = [name, runtime_command(task_type, config)]
         kwargs: dict[str, Any] = {}
@@ -716,9 +845,11 @@ def agentic_contract(config: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def document_fields(task_type: str, config: dict[str, Any]) -> dict[str, Any]:
+def document_fields(task_type: str, config: dict[str, Any], name: str = "task") -> dict[str, Any]:
     """Return the task-level fields DAGonStar's JSON loader reads for a type."""
     config = config or {}
+    if task_type in INTERACTIVE_TASK_TYPES:
+        return {"command": interactive_runtime_command(task_type, name, config)}
     if task_type in COMMAND_TYPES:
         fields: dict[str, Any] = {"command": runtime_command(task_type, config)}
         if task_type == "slurm" and isinstance(config.get("pre_stage"), bool):
@@ -799,3 +930,108 @@ def editor_references(task_type: str, config: dict[str, Any]) -> dict[str, Any]:
         config.pop("source", None)
     config.pop("explicit_prevs", None)
     return config
+
+
+# ---------------------------------------------------------------------------
+# DagonTask(...) arguments → editor configuration (Python import)
+# ---------------------------------------------------------------------------
+
+_ASSIGNMENT_LINE = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.*?)\s*;\s*$")
+# Constructor parameters that only describe where DAGonStar runs a task;
+# DAGonWeb manages them, so they never become editor configuration.
+_RUNTIME_ONLY = {"working_dir", "globusendpoint", "transversal_workflow", "container_id", "tmp_dir", "ip", "keypath"}
+
+
+def bind_task_arguments(task_type: str, args: list[Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Name the positional ``DagonTask`` arguments with DAGonStar's signature.
+
+    Only DAGonStar's own task classes are inspected; nothing is instantiated.
+    """
+    import importlib
+    import inspect
+
+    from dagon.task import TaskType as DagonTaskType, tasks_types
+
+    module_name, class_name = tasks_types[DagonTaskType[task_type.upper()]]
+    signature = inspect.signature(getattr(importlib.import_module(module_name), class_name).__init__)
+    bound = signature.bind_partial(None, *args, **kwargs).arguments
+    bound.pop("self", None)
+    extra = bound.pop("kwargs", None) or bound.pop("_", None) or {}
+    return {**bound, **extra}
+
+
+def split_input_assignments(command: str) -> tuple[dict[str, str], str]:
+    """Undo ``runtime_command``: leading ``name=value ;`` lines become inputs."""
+    inputs: dict[str, str] = {}
+    lines = (command or "").split("\n")
+    index = 0
+    while index < len(lines):
+        match = _ASSIGNMENT_LINE.match(lines[index].strip())
+        if not match:
+            break
+        value = match.group("value")
+        if not WORKFLOW_REFERENCE.fullmatch(value):
+            try:
+                parts = shlex.split(value)
+            except ValueError:
+                break
+            if len(parts) != 1 and value not in ("''", '""'):
+                break
+            value = parts[0] if parts else ""
+        inputs[match.group("name")] = value
+        index += 1
+    return inputs, "\n".join(lines[index:])
+
+
+def config_from_arguments(task_type: str, args: list[Any], kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Return ``(name, config)`` for ``DagonTask(TaskType.X, *args, **kwargs)``.
+
+    This is the inverse of :func:`dagon_task_arguments`, so
+    ``dagon_task_arguments(type, *config_from_arguments(type, a, k))`` gives
+    back ``(a, k)`` for every program DAGonWeb generates.
+    """
+    bound = bind_task_arguments(task_type, list(args), dict(kwargs))
+    name = str(bound.pop("name", "") or "")
+    for key in _RUNTIME_ONLY:
+        bound.pop(key, None)
+    if task_type in COMMAND_TYPES:
+        command = str(bound.pop("command", "") or "")
+        if task_type == "checkpoint":
+            config = config_from_document({"type": "checkpoint", "command": command})
+        else:
+            inputs, body = split_input_assignments(command)
+            config = {"command": body, "inputs": inputs}
+        if task_type == "cloud" and isinstance(bound.get("key_options"), dict):
+            options = {key: value for key, value in bound["key_options"].items() if not (key == "key_path" and value == "")}
+            bound["key_options"] = options
+            if not options:
+                bound.pop("key_options")
+        config.update({key: value for key, value in bound.items() if value is not None})
+        return name, config
+    if task_type == "native":
+        config = {"callable": str(bound.pop("function", "") or ""), "source": "", "requirements": ""}
+        for key in ("inputs", "outputs", "resources", "environment"):
+            config[key] = _dict(bound.get(key))
+        config["executor"] = bound.get("executor") or "local"
+        config["python"] = bound.get("python") or ""
+        return name, config
+    if task_type == "web":
+        return name, _dict(bound.get("specification"))
+    if task_type == "llm":
+        config = {
+            "provider": bound.get("provider") or "",
+            "prompt": bound.get("prompt") or {},
+            "params": _dict(bound.get("params")),
+            "input_files": _dict(bound.get("input_files")),
+            "output_file": bound.get("output_file") or "response.json",
+        }
+        if bound.get("timeout") is not None:
+            config["timeout"] = bound["timeout"]
+        return name, config
+    if task_type == "faas":
+        return name, {**_dict(bound.get("specification")), **{key: value for key, value in bound.items() if key in FAAS_KEYS}}
+    if task_type == "iot":
+        return name, {IOT_ALIASES.get(key, key): value for key, value in bound.items() if value is not None}
+    if task_type == "agentic":
+        return name, {key: value for key, value in bound.items() if value is not None and key in (*AGENTIC_KEYS, "pre_stage")}
+    raise ValueError(f"Unsupported task type {task_type}")

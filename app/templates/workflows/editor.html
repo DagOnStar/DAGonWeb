@@ -15,12 +15,16 @@
     <div class="dropdown">
       <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">Export</button>
       <ul class="dropdown-menu dropdown-menu-end">
-        <li><a class="dropdown-item" href="{{ url_for('workflows.download_workflow', workflow_id=workflow.id) }}">DAGonStar JSON</a></li>
-        <li><a class="dropdown-item" href="{{ url_for('workflows.download_workflow_python', workflow_id=workflow.id) }}">Python program</a></li>
+        <li><a class="dropdown-item" href="{{ url_for('workflows.download_workflow_bundle', workflow_id=workflow.id) }}"><strong>Headless application (ZIP)</strong><br><small class="text-body-secondary">Commented Python program, JSON, CWL, dagon.ini, README</small></a></li>
+        <li><hr class="dropdown-divider"></li>
+        <li><a class="dropdown-item" href="{{ url_for('workflows.download_workflow_python', workflow_id=workflow.id) }}">Python program (.py)</a></li>
+        <li><a class="dropdown-item" href="{{ url_for('workflows.download_workflow', workflow_id=workflow.id) }}">DAGonWeb JSON (round-trip)</a></li>
+        <li><a class="dropdown-item" href="{{ url_for('workflows.download_workflow', workflow_id=workflow.id, portable=1) }}">DAGonStar JSON (portable)</a></li>
         <li><a class="dropdown-item" href="{{ url_for('workflows.download_workflow_cwl', workflow_id=workflow.id) }}">CWL v1.2</a></li>
       </ul>
     </div>
     {% if editable %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.workflow_setup', workflow_id=workflow.id) }}">Setup</a>{% endif %}
+    {% if editable and current_user.can('assistant.use') %}<button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="offcanvas" data-bs-target="#assistantPanel" aria-controls="assistantPanel">✨ Assistant</button>{% endif %}
     <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="modal" data-bs-target="#shortcutsModal" aria-label="Keyboard shortcuts">?</button>
     <form class="d-inline" method="post" action="{{ url_for('workflows.run_workflow', workflow_id=workflow.id) }}" id="runForm">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -107,9 +111,39 @@
     </div>
   </div></div>
 </div>
+{% if editable and current_user.can('assistant.use') %}
+<div class="offcanvas offcanvas-end" tabindex="-1" id="assistantPanel" aria-labelledby="assistantTitle"
+     data-workflow-id="{{ workflow.id }}" data-csrf="{{ csrf_token() }}" data-enabled="{{ '1' if assistant_enabled else '0' }}"
+     data-chat-url="{{ url_for('assistant.chat', workflow_id=workflow.id) }}"
+     data-validate-url="{{ url_for('assistant.validate', workflow_id=workflow.id) }}">
+  <div class="offcanvas-header border-bottom py-2">
+    <h2 class="offcanvas-title h5" id="assistantTitle">✨ Workflow assistant</h2>
+    <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+  </div>
+  <div class="offcanvas-body d-flex flex-column gap-2">
+    <div class="assistant-chips d-flex flex-wrap gap-1">
+      <button type="button" class="btn btn-sm btn-outline-secondary" id="assistantCheck">Check workflow</button>
+      {% if assistant_enabled %}
+      <button type="button" class="btn btn-sm btn-outline-secondary" data-prompt="Explain what this workflow does, task by task.">Explain</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" data-prompt="My last run failed. Diagnose it and fix the workflow.">Fix last run</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" data-prompt="Add a table and a chart of the final results, and a download task with all outputs.">Add results view</button>
+      {% endif %}
+      <button type="button" class="btn btn-sm btn-link ms-auto" id="assistantClear">New chat</button>
+    </div>
+    <div id="assistantLog" class="assistant-log flex-grow-1" aria-live="polite"></div>
+    <div id="assistantDraft" class="assistant-draft" hidden></div>
+    <form id="assistantForm" class="d-flex flex-column gap-2">
+      <label class="visually-hidden" for="assistantInput">Message the assistant</label>
+      <textarea id="assistantInput" class="form-control" rows="3" placeholder="{{ 'e.g. Ask the user for a CSV, clean it with pandas, then show a table and a bar chart of the mean per column' if assistant_enabled else 'The assistant is not configured' }}" {% if not assistant_enabled %}disabled{% endif %}></textarea>
+      <div class="d-flex justify-content-between align-items-center"><span class="small text-body-secondary">Ctrl/⌘ + Enter to send</span><button class="btn btn-primary btn-sm" id="assistantSend" {% if not assistant_enabled %}disabled{% endif %}>Send</button></div>
+    </form>
+  </div>
+</div>
+{% endif %}
 <script type="application/json" id="taskSpecs">{{ palette|tojson }}</script>
 {% endblock %}
 {% block scripts %}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.36.5/ace.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="{{ url_for('static', filename='js/editor.js') }}"></script>
+<script src="{{ url_for('static', filename='js/assistant.js') }}"></script>
 {% endblock %}

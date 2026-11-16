@@ -1,3 +1,7 @@
+# DAGonWeb with MySQL. Standalone or as an overlay:
+#   docker compose -f docker-compose.mysql.yml up --build
+#   docker compose -f docker-compose.yml -f docker-compose.mysql.yml -f docker-compose.redis.yml up --build
+# With the Redis overlay, put the same DATABASE_URL in .env so workers use it too.
 services:
   db:
     image: mysql:8.4
@@ -10,9 +14,12 @@ services:
       - mysql-data:/var/lib/mysql
   dagonweb:
     build: .
+    env_file:
+      - path: .env
+        required: false
     environment:
-      SECRET_KEY: change-me
-      DATABASE_URL: mysql+pymysql://dagonweb:dagonweb@db:3306/dagonweb
+      SECRET_KEY: ${SECRET_KEY:-change-me}
+      DATABASE_URL: ${DATABASE_URL:-mysql+pymysql://dagonweb:dagonweb@db:3306/dagonweb}
       SCRATCH_DIR: /scratch/dagonweb
       ADMIN_EMAIL: admin@example.org
       ADMIN_PASSWORD: admin12345

@@ -23,9 +23,12 @@ from flask import current_app
 from ..dagon_ini import merge_workflow_dagon_config, runtime_dagon_config
 from ..extensions import db
 from ..models import LINK_EXPLICIT, RunStatus, Setting, TaskRun, Workflow, WorkflowRun
-from ..task_specs import dagon_task_arguments
+from ..interactive import substitute_runtime
+from ..task_specs import INTERACTIVE_TASK_TYPES, dagon_task_arguments, runtime_type
 
 CHECKPOINT_FILE = ("_dagonweb", "checkpoint.json")
+# User-provided data of interactive Upload/Form tasks, one folder per task.
+INTERACTIVE_DATA_DIR = ("_dagonweb", "data")
 # sys.path is process-global: serialize the short windows that change it.
 _IMPORT_LOCK = threading.RLock()
 _TASK_EVENTS = {
@@ -42,8 +45,9 @@ def timestamped_log(message: str) -> str:
 
 
 def scratch_root() -> Path:
-    configured = Setting.query.filter_by(key="scratch_dir").first()
-    root = Path(configured.value if configured else current_app.config["SCRATCH_DIR"]).resolve()
+    from .. import settings
+
+    root = Path(str(settings.get("scratch_dir") or current_app.config["SCRATCH_DIR"])).resolve()
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -181,6 +185,7 @@ def build_runtime_workflow(
     *,
     checkpoint_file: str | None = None,
     overrides: dict[str, dict[str, Any]] | None = None,
+    interactive_data_dir: Path | None = None,
 ) -> Any:
     """Build a ``dagon.Workflow`` with one ``DagonTask`` per stored task.
 
@@ -210,7 +215,10 @@ def build_runtime_workflow(
             # may not exist in a virtualenv-only deployment.
             kwargs["python"] = sys.executable
         kwargs.update(overrides.get(task.name, {}))
-        runtime_task = DagonTask(DagonTaskType[task_type.upper()], *args, **kwargs)
+        if task_type in INTERACTIVE_TASK_TYPES and interactive_data_dir is not None:
+            # Bind DAGONWEB_DATA / DAGONWEB_PYTHON to this run.
+            args[1] = substitute_runtime(args[1], str(interactive_data_dir), sys.executable)
+        runtime_task = DagonTask(DagonTaskType[runtime_type(task_type).upper()], *args, **kwargs)
         runtime.add_task(runtime_task)
         tasks[task.name] = runtime_task
     for link in workflow.links:
@@ -242,6 +250,11 @@ def export_cwl(workflow: Workflow) -> str:
 
 def run_checkpoint_path(run_dir: Path) -> Path:
     return safe_child(run_dir, *CHECKPOINT_FILE)
+
+
+def run_data_path(run_dir: Path, *parts: str) -> Path:
+    """Folder (below the run directory) for interactive task data."""
+    return safe_child(run_dir, *INTERACTIVE_DATA_DIR, *parts)
 
 
 def _task_status(task: Any) -> str:
@@ -303,6 +316,8 @@ def execute_workflow(workflow: Workflow, user_id: int, run: WorkflowRun | None =
         run.scratch_path = str(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = run_checkpoint_path(run_dir)
+    data_dir = run_data_path(run_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
     checkpoint.parent.mkdir(parents=True, exist_ok=True)
     resume_file = str(checkpoint) if resume and checkpoint.is_file() else None
     run.log = (run.log or "") + timestamped_log("Workflow resumed from checkpoint." if resume_file else "Workflow started.")
@@ -316,7 +331,7 @@ def execute_workflow(workflow: Workflow, user_id: int, run: WorkflowRun | None =
     try:
         overrides = prepare_native_task_environments(workflow, root)
         with native_modules_importable(workflow, root):
-            runtime = build_runtime_workflow(workflow, workflow_config(workflow, run_dir), checkpoint_file=str(checkpoint), overrides=overrides)
+            runtime = build_runtime_workflow(workflow, workflow_config(workflow, run_dir), checkpoint_file=str(checkpoint), overrides=overrides, interactive_data_dir=data_dir)
         enable_fair_if_configured(runtime, workflow, run_dir)
         task_runs = {task.name: TaskRun(workflow_run_id=run_id, task_uid=task.name, status=RunStatus.PENDING.value, scratch_path=str(run_dir), log="") for task in runtime.tasks}
         db.session.add_all(task_runs.values())

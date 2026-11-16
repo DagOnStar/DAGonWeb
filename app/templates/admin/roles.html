@@ -1,1 +1,16 @@
-{% extends 'base.html' %}{% block content %}<div class="d-flex justify-content-between"><h1>Roles</h1><a class="btn btn-primary" href="{{ url_for('admin.role_new') }}">New role</a></div><table class="table"><tr><th>Name</th><th>Description</th><th></th></tr>{% for role in roles %}<tr><td>{{ role.name }}</td><td>{{ role.description }}</td><td><a href="{{ url_for('admin.role_edit', role_id=role.id) }}">Edit</a><form method="post" action="{{ url_for('admin.role_delete', role_id=role.id) }}" class="d-inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-link text-danger">Delete</button></form></td></tr>{% endfor %}</table>{% endblock %}
+{% extends 'admin/_layout.html' %}
+{% block admin_content %}
+<div class="page-header"><div><h1 class="h3">Roles &amp; permissions</h1><p class="page-subtitle">Roles grant permissions; <code>admin</code> implies every permission. New accounts get the <code>user</code> role.</p></div>
+  <a class="btn btn-primary" href="{{ url_for('admin.role_new') }}">New role</a></div>
+<div class="card"><div class="table-responsive"><table class="table table-sm align-middle mb-0">
+  <thead><tr><th scope="col">Role</th><th scope="col">Permissions</th><th scope="col">Users</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+  <tbody>
+  {% for role in roles %}
+    <tr><td><div class="fw-semibold">{{ role.name }}</div><div class="small text-body-secondary">{{ role.description }}</div></td>
+      <td>{% if role.name == 'admin' %}<span class="badge text-bg-danger">all permissions</span>{% else %}{% for permission in role.permissions %}<span class="badge text-bg-light border me-1" title="{{ permissions[permission] }}">{{ permission }}</span>{% else %}<span class="text-body-secondary small">none</span>{% endfor %}{% endif %}</td>
+      <td>{{ role.users.count() }}</td>
+      <td class="text-end text-nowrap"><a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin.role_edit', role_id=role.id) }}">Edit</a>
+        {% if role.name not in protected %}<form method="post" action="{{ url_for('admin.role_delete', role_id=role.id) }}" class="d-inline" onsubmit="return confirm('Delete role {{ role.name }}?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-danger">Delete</button></form>{% endif %}</td></tr>
+  {% endfor %}
+  </tbody></table></div></div>
+{% endblock %}

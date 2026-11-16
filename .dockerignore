@@ -1,0 +1,12 @@
+.git
+.github
+.idea
+.claude
+.venv
+venv
+.env
+instance
+scratch
+**/__pycache__
+.pytest_cache
+*.sqlite

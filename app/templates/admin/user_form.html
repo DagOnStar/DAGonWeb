@@ -1,1 +1,21 @@
-{% extends 'base.html' %}{% block content %}<h1>User</h1><form method="post" class="col-md-6">{{ form.hidden_tag() }}<div class="mb-3">{{ form.name.label(class='form-label') }}{{ form.name(class='form-control') }}</div><div class="mb-3">{{ form.email.label(class='form-label') }}{{ form.email(class='form-control') }}</div><div class="mb-3">{{ form.password.label(class='form-label') }}{{ form.password(class='form-control') }}<div class="form-text">Leave empty to keep existing password.</div></div><div class="mb-3">{{ form.roles.label(class='form-label') }}{{ form.roles(class='form-select', size=4) }}</div><div class="form-check mb-3">{{ form.active(class='form-check-input') }}{{ form.active.label(class='form-check-label') }}</div>{{ form.submit(class='btn btn-primary') }}</form>{% endblock %}
+{% extends 'admin/_layout.html' %}
+{% block admin_content %}
+<h1 class="h3 mb-3">{{ title }}</h1>
+<form method="post" class="card col-xl-8" novalidate>
+  <div class="card-body">
+    {{ form.hidden_tag() }}
+    {% for field in [form.name, form.email, form.password] %}
+      <div class="mb-3">{{ field.label(class='form-label') }}{{ field(class='form-control' ~ (' is-invalid' if field.errors else ''), autocomplete=('new-password' if field.name == 'password' else 'off')) }}
+        {% for error in field.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+        {% if field.name == 'password' and user %}<div class="form-text">Leave empty to keep the current password.</div>{% endif %}</div>
+    {% endfor %}
+    <fieldset class="mb-3"><legend class="form-label fs-6">Roles</legend><div class="checkbox-list">{{ form.roles(class='list-unstyled mb-0') }}</div></fieldset>
+    <div class="form-check form-switch mb-3">{{ form.active(class='form-check-input', role='switch') }}{{ form.active.label(class='form-check-label') }}</div>
+    {% if user and user.external_id %}
+      <div class="alert alert-secondary small">Signs in with <strong>{{ user.auth_provider }}</strong> (subject <code>{{ user.external_id }}</code>).
+        <div class="form-check mt-1">{{ form.unlink_sso(class='form-check-input') }}{{ form.unlink_sso.label(class='form-check-label') }}</div></div>
+    {% endif %}
+  </div>
+  <div class="card-footer d-flex gap-2">{{ form.submit(class='btn btn-primary') }}<a class="btn btn-outline-secondary" href="{{ url_for('admin.users') }}">Cancel</a></div>
+</form>
+{% endblock %}

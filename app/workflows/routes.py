@@ -5,7 +5,6 @@ import re
 import shutil
 from configparser import Error as ConfigParserError
 from io import BytesIO
-from threading import Thread
 from zipfile import ZIP_DEFLATED, ZipFile
 from pathlib import Path
 import networkx as nx
@@ -15,9 +14,14 @@ from flask_login import current_user, login_required
 from ..extensions import db
 from ..dagon_ini import dump_dagon_ini, parse_dagon_ini
 from ..models import ACTIVE_RUN_STATUSES, LINK_DATA, LINK_EXPLICIT, TaskRun, TaskType, Workflow, WorkflowLink, WorkflowTask, WorkflowRun
-from ..executor.local import execute_workflow, export_cwl, list_directory, list_files, preview_task_file, safe_child, scratch_root
-from ..task_specs import CATEGORIES, TASK_SPECS, TASK_TYPE_LABELS, WORKFLOW_REFERENCE, config_from_document, dagon_task_arguments, editor_references, palette
+from ..executor.local import timestamped_log, execute_workflow, export_cwl, list_directory, list_files, preview_task_file, safe_child, scratch_root
+from ..task_specs import INTERACTIVE_TASK_TYPES, CATEGORIES, TASK_SPECS, TASK_TYPE_LABELS, WORKFLOW_REFERENCE, config_from_document, dagon_task_arguments, editor_references, palette
+from werkzeug.utils import secure_filename
+from ..interactive import coerce_form_values, form_document, form_env, form_fields, safe_filename
 from .forms import DAGONSTAR_NAME_RE, RunForm, WorkflowForm, WorkflowSetupForm
+from .. import audit, settings
+from ..authz import permission_required
+from ..pycode import PythonImportError, import_python_files, portable_ini_sections, python_bundle, read_upload, workflow_python_source  # noqa: F401
 
 bp = Blueprint("workflows", __name__)
 FAIR_EXPORT_FILES = {
@@ -64,6 +68,11 @@ TEMPLATE_DESCRIPTIONS = {
     "faas": "Batch → FaaS (mock provider) → Batch, with no credentials needed.",
     "iot": "A bounded IoT observation from the credential-free mock provider.",
     "agentic": "A producer and a bounded Agentic quality-control task (mock adapter).",
+    "upload": "Upload a CSV on the run page, then see it as a table and a chart.",
+    "form": "Fill a form on the run page; a Batch task reads the values from form.env.",
+    "table": "A Batch task writes a CSV that the run page shows as a table.",
+    "chart": "A Batch task writes a CSV that the run page plots as a line chart.",
+    "download": "Produce a CSV and a table, then offer both as one ZIP download.",
 }
 # Templates for external back-ends enable DAGonStar portable emulation, so the
 # example runs locally until the real back-end is configured.
@@ -89,6 +98,16 @@ OBSERVATIONS_COMMAND = (
     "{\"id\": 2, \"station\": \"SYN001\", \"temperature_c\": 14.0}, {\"id\": 2, \"station\": \"SYN001\", \"temperature_c\": 14.0}, "
     "{\"id\": 3, \"station\": \"SYN002\", \"temperature_c\": 11.5}, {\"id\": 4, \"station\": \"SYN002\", \"temperature_c\": 13.5}]}' "
     "> outputs/observations.json"
+)
+
+
+MEASUREMENTS_COMMAND = (
+    "mkdir -p outputs\n"
+    "cat > outputs/measurements.csv <<'CSV'\n"
+    "month,rainfall_mm,temperature_c\n"
+    "Jan,98,10.4\nFeb,82,11.0\nMar,74,13.1\nApr,66,15.6\nMay,42,19.8\nJun,19,24.0\n"
+    "CSV\n"
+    "wc -l outputs/measurements.csv"
 )
 
 
@@ -138,6 +157,23 @@ def apply_workflow_template(workflow: Workflow, template: str) -> None:
         config["inputs"] = {"source": "workflow:///prepare/outputs/observations.json"}
         add_workflow_task(workflow, "quality_control", "agentic", 420, 200, config)
         workflow.dagon_ini = {**workflow.dagon_ini, **AGENTIC_TEMPLATE_INI}
+    elif template in ("table", "chart", "download"):
+        add_workflow_task(workflow, "measure", "batch", 120, 200, {"command": MEASUREMENTS_COMMAND, "inputs": {}})
+        source = {"source": "workflow:///measure/outputs/measurements.csv"}
+        if template in ("table", "download"):
+            add_workflow_task(workflow, "make_table", "table", 400, 120 if template == "download" else 200, {**TASK_SPECS["table"].default_config, "title": "Monthly measurements", "inputs": dict(source)})
+        if template == "chart":
+            add_workflow_task(workflow, "make_chart", "chart", 400, 200, {**TASK_SPECS["chart"].default_config, "title": "Temperature by month", "chart_type": "line", "x": "month", "y": ["temperature_c"], "inputs": dict(source)})
+        if template == "download":
+            add_workflow_task(workflow, "download_results", "download", 680, 200, {"archive": "results.zip", "inputs": {"data": "workflow:///measure/outputs/measurements.csv", "table": "workflow:///make_table/outputs/table.csv"}})
+    elif template == "upload":
+        add_workflow_task(workflow, "upload_data", "upload", 120, 200, {**TASK_SPECS["upload"].default_config, "description": "Upload a CSV with a header row.", "accept": ".csv", "save_as": "data.csv"})
+        source = {"source": "workflow:///upload_data/outputs/data.csv"}
+        add_workflow_task(workflow, "make_table", "table", 400, 120, {**TASK_SPECS["table"].default_config, "title": "Uploaded data", "inputs": dict(source)})
+        add_workflow_task(workflow, "make_chart", "chart", 400, 300, {**TASK_SPECS["chart"].default_config, "title": "Uploaded data", "inputs": dict(source)})
+    elif template == "form":
+        add_workflow_task(workflow, "fill_form", "form", 120, 200, json.loads(json.dumps(TASK_SPECS["form"].default_config)))
+        add_workflow_task(workflow, "use_values", "batch", 420, 200, {"command": ". $values\necho \"Threshold $THRESHOLD for $LABEL\" > summary.txt", "inputs": {"values": "workflow:///fill_form/outputs/form.env"}})
     else:
         spec = TASK_SPECS[template]
         add_workflow_task(workflow, spec.default_name, template, 160, 160, json.loads(json.dumps(spec.default_config)))
@@ -307,6 +343,9 @@ def validate_graph_payload(payload: object) -> tuple[list[dict], list[dict]]:
             raise ValueError("DAGonWeb task extension must be an object.")
         task_type = str(task_data.get("type", "batch")).lower()
         task_type = {"bash": "batch", "python": "batch"}.get(task_type, task_type)
+        if isinstance(extension.get("task_type"), str) and extension["task_type"] in INTERACTIVE_TASK_TYPES:
+            # DAGonWeb interactive kinds are stored as DAGonStar Batch tasks.
+            task_type = extension["task_type"]
         config = extension["config"] if "config" in extension else config_from_document({**task_data, "type": task_type})
         explicit = task_data.get("explicit_prevs", [])
         if not isinstance(explicit, list) or not all(isinstance(item, str) for item in explicit):
@@ -479,9 +518,14 @@ def list_workflows():
     )
 
 @bp.route("/new", methods=["GET", "POST"])
-@login_required
+@permission_required("workflows.create")
 def create_workflow():
     template = request.args.get("template", "").strip()
+    if request.method == "GET" and request.args.get("assistant"):
+        wf = Workflow(owner_id=current_user.id, name="New_assistant_workflow", description="Designed with the workflow assistant.", is_public=False)
+        db.session.add(wf)
+        db.session.commit()
+        return redirect(url_for("workflows.editor", workflow_id=wf.id, assistant=1))
     if request.method == "GET" and template:
         try:
             template_labels = dict(workflow_template_options())
@@ -502,7 +546,7 @@ def create_workflow():
         return redirect(url_for("workflows.editor", workflow_id=wf.id))
     form = WorkflowForm()
     if form.validate_on_submit():
-        wf = Workflow(owner_id=current_user.id, name=validate_dagonstar_name(form.name.data, "Workflow name"), description=form.description.data or "", is_public=form.is_public.data)
+        wf = Workflow(owner_id=current_user.id, name=validate_dagonstar_name(form.name.data, "Workflow name"), description=form.description.data or "", is_public=bool(form.is_public.data) and current_user.can("workflows.publish"))
         db.session.add(wf)
         db.session.commit()
         flash("Workflow created.", "success")
@@ -519,7 +563,7 @@ def edit_workflow(workflow_id):
     if form.validate_on_submit():
         wf.name = validate_dagonstar_name(form.name.data, "Workflow name")
         wf.description = form.description.data or ""
-        wf.is_public = form.is_public.data
+        wf.is_public = bool(form.is_public.data) and current_user.can("workflows.publish")
         db.session.commit()
         flash("Workflow updated.", "success")
         return redirect(url_for("workflows.list_workflows"))
@@ -548,7 +592,7 @@ def workflow_setup(workflow_id: int):
     if form.validate_on_submit():
         wf.name = validate_dagonstar_name(form.name.data, "Workflow name")
         wf.description = form.description.data or ""
-        wf.is_public = form.is_public.data
+        wf.is_public = bool(form.is_public.data) and current_user.can("workflows.publish")
         wf.fair_profile = fair_profile_from_form(form, wf)
         wf.runtime_options = {
             "portable_emulation": bool(form.portable_emulation.data),
@@ -638,7 +682,9 @@ def editor(workflow_id):
     wf = db.get_or_404(Workflow, workflow_id)
     if not can_access(wf):
         abort(403)
-    return render_template("workflows/editor.html", workflow=wf, editable=can_edit(wf), task_types=TASK_TYPE_LABELS.items(), palette=palette())
+    from ..agents.llm import is_enabled as assistant_enabled
+
+    return render_template("workflows/editor.html", workflow=wf, editable=can_edit(wf), task_types=TASK_TYPE_LABELS.items(), palette=palette(), assistant_enabled=assistant_enabled())
 
 @bp.get("/<int:workflow_id>/graph")
 @login_required
@@ -668,8 +714,20 @@ def download_workflow(workflow_id: int):
     workflow = db.get_or_404(Workflow, workflow_id)
     if not can_access(workflow):
         abort(403)
-    filename = re.sub(r"[^A-Za-z0-9_-]+", "-", workflow.name).strip("-") or f"workflow-{workflow.id}"
-    return Response(json.dumps(workflow.as_json(), indent=2), mimetype="application/json", headers={"Content-Disposition": f'attachment; filename="{filename}.json"'})
+    filename = export_filename(workflow)
+    document = workflow.as_json()
+    if request.args.get("portable"):
+        # Plain DAGonStar document: no editor extension. Interactive tasks stay
+        # Batch tasks that read DAGONWEB_DATA / DAGONWEB_PYTHON.
+        document.pop("dagonweb", None)
+        for entry in document["tasks"].values():
+            entry.pop("dagonweb", None)
+        filename += ".dagonstar"
+    return Response(json.dumps(document, indent=2, sort_keys=True) + "\n", mimetype="application/json", headers={"Content-Disposition": f'attachment; filename="{filename}.json"'})
+
+
+def export_filename(workflow: Workflow) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", workflow.name).strip("-") or f"workflow-{workflow.id}"
 
 
 @bp.get("/<int:workflow_id>/python")
@@ -678,138 +736,24 @@ def download_workflow_python(workflow_id: int):
     workflow = db.get_or_404(Workflow, workflow_id)
     if not can_access(workflow):
         abort(403)
-    filename = re.sub(r"[^A-Za-z0-9_-]+", "-", workflow.name).strip("-") or f"workflow-{workflow.id}"
     source = workflow_python_source(workflow)
-    return Response(source, mimetype="text/x-python", headers={"Content-Disposition": f'attachment; filename="{filename}.py"'})
+    return Response(source, mimetype="text/x-python", headers={"Content-Disposition": f'attachment; filename="{export_filename(workflow)}.py"'})
 
 
-SECRET_KEY_HINTS = ("key", "secret", "token", "password", "credential", "authorization")
-
-
-def portable_ini_sections(workflow: Workflow) -> dict[str, dict[str, str]]:
-    """Agent profile sections safe to embed in a generated program."""
-    sections: dict[str, dict[str, str]] = {}
-    for section, values in workflow.dagon_ini.items():
-        if not isinstance(values, dict) or not (section.startswith("agent.") or section.startswith("agent_provider.")):
-            continue
-        sections[section] = {str(key): str(value) for key, value in values.items() if not any(hint in str(key).lower() for hint in SECRET_KEY_HINTS)}
-    return sections
-
-
-def workflow_python_source(workflow: Workflow) -> str:
-    """Generate an editable, direct DAGonStar Python workflow program."""
-    identifiers: dict[str, str] = {}
-    used_identifiers: set[str] = set()
-    for task in workflow.tasks:
-        base = re.sub(r"\W|^(?=\d)", "_", task.name)
-        identifier = f"task_{base}"
-        suffix = 2
-        while identifier in used_identifiers:
-            identifier = f"task_{base}_{suffix}"
-            suffix += 1
-        identifiers[task.name] = identifier
-        used_identifiers.add(identifier)
-
-    declarations: list[str] = []
-    native_sources: dict[str, str] = {}
-    for task in workflow.tasks:
-        task_type = task.normalized_task_type
-        args, kwargs = dagon_task_arguments(task_type, task.name, task.config)
-        rendered = [f"TaskType.{task_type.upper()}", *(repr(arg) for arg in args), *(f"{key}={value!r}" for key, value in kwargs.items())]
-        declarations.append(f"{identifiers[task.name]} = DagonTask({', '.join(rendered)})")
-        source = task.config.get("source") if task_type == "native" else None
-        module = str(task.config.get("callable", "")).partition(":")[0]
-        if isinstance(source, str) and source.strip() and module:
-            native_sources[module] = source.rstrip() + "\n"
-
-    additions = "\n".join(f"    workflow.add_task({identifiers[task.name]})" for task in workflow.tasks)
-    explicit = "\n".join(
-        f"    {identifiers[link.target_uid]}.add_dependency_to({identifiers[link.source_uid]})"
-        for link in workflow.links
-        if link.kind == LINK_EXPLICIT and link.source_uid in identifiers and link.target_uid in identifiers
-    )
-    options = workflow.runtime_options
-    workflow_kwargs = []
-    if options.get("portable_emulation"):
-        workflow_kwargs.append("portable_emulation=True")
-    if options.get("pre_stage"):
-        workflow_kwargs.append("pre_stage=True")
-    if options.get("max_threads"):
-        workflow_kwargs.append(f"max_threads={int(options['max_threads'])}")
-    workflow_kwargs.append('checkpoint_file=str(workdir / "checkpoint.json")')
-    extra_sections = portable_ini_sections(workflow)
-    native_block = ""
-    if native_sources:
-        native_block = f'''
-# Embedded Native task sources, written next to the scratch directory and
-# added to sys.path so DAGonStar can import them.
-NATIVE_SOURCES = {native_sources!r}
-
-
-def install_native_sources(workdir: Path) -> None:
-    module_root = workdir / "native_modules"
-    for module, source in NATIVE_SOURCES.items():
-        parts = module.split(".")
-        target = module_root.joinpath(*parts[:-1], parts[-1] + ".py")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(source, encoding="utf-8")
-        for depth in range(1, len(parts)):
-            module_root.joinpath(*parts[:depth], "__init__.py").touch()
-    sys.path.insert(0, str(module_root))
-
-'''
-    return f'''#!/usr/bin/env python3
-"""Generated DAGonStar workflow: {workflow.name}.
-
-Generated by DAGonWeb for DAGonStar 2.9. Run it with ``python {workflow.name}.py``;
-add ``--resume`` to continue a failed run from its checkpoint.
-"""
-import sys
-from pathlib import Path
-
-from dagon import Workflow
-from dagon.config import read_config
-from dagon.task import DagonTask, TaskType
-
-EXTRA_SECTIONS = {extra_sections!r}
-
-{native_block}
-def local_config(workdir: Path) -> dict:
-    """Use ./dagon.ini when present, rooted at ``workdir`` for task scratch."""
-    config = read_config("dagon.ini") if Path("dagon.ini").is_file() else {{}}
-    for section, values in EXTRA_SECTIONS.items():
-        config.setdefault(section, dict(values))
-    config.setdefault("batch", {{}}).update({{"scratch_dir_base": str(workdir), "remove_dir": False}})
-    config.setdefault("ftp_pub", {{}})
-    config.setdefault("dagon_service", {{"use": "False"}})
-    return config
-
-
-def build_workflow(workdir: Path) -> Workflow:
-    workdir.mkdir(parents=True, exist_ok=True)
-{"    install_native_sources(workdir)" if native_sources else ""}
-    workflow = Workflow({workflow.name!r}, config=local_config(workdir), {", ".join(workflow_kwargs)})
-
-    # Task declarations
-{chr(10).join('    ' + declaration for declaration in declarations)}
-
-    # Register tasks before DAGonStar discovers workflow:// dependencies.
-{additions}
-{("    # Explicit (non-data) dependencies, serialized as explicit_prevs." + chr(10) + explicit) if explicit else ""}
-    workflow.make_dependencies()
-    return workflow
-
-
-if __name__ == "__main__":
-    workdir = Path.cwd() / "scratch"
-    workflow = build_workflow(workdir)
-    checkpoint = workdir / "checkpoint.json"
-    workflow.launch(resume_checkpoint_file=str(checkpoint) if "--resume" in sys.argv and checkpoint.is_file() else None)
-    workflow.wait()
-    failed = [task.name for task in workflow.tasks if task.status.name != "FINISHED"]
-    print("Failed tasks: " + ", ".join(failed) if failed else "Workflow completed.")
-    sys.exit(1 if failed else 0)
-'''
+@bp.get("/<int:workflow_id>/bundle")
+@login_required
+def download_workflow_bundle(workflow_id: int):
+    """Ready-to-use headless application: program, JSON, CWL, dagon.ini, README."""
+    workflow = db.get_or_404(Workflow, workflow_id)
+    if not can_access(workflow):
+        abort(403)
+    try:
+        cwl = export_cwl(workflow)
+    except Exception as exc:  # CWL is optional in the bundle
+        current_app.logger.info("CWL export skipped for bundle: %s", exc)
+        cwl = None
+    data = python_bundle(workflow, cwl)
+    return send_file(BytesIO(data), mimetype="application/zip", as_attachment=True, download_name=f"{export_filename(workflow)}.zip")
 
 
 @bp.get("/<int:workflow_id>/cwl")
@@ -818,7 +762,7 @@ def download_workflow_cwl(workflow_id: int):
     workflow = db.get_or_404(Workflow, workflow_id)
     if not can_access(workflow):
         abort(403)
-    filename = re.sub(r"[^A-Za-z0-9_-]+", "-", workflow.name).strip("-") or f"workflow-{workflow.id}"
+    filename = export_filename(workflow)
     try:
         source = export_cwl(workflow)
     except Exception as exc:  # DAGonStar validation errors are user-facing here.
@@ -828,57 +772,66 @@ def download_workflow_cwl(workflow_id: int):
 
 
 @bp.post("/upload")
-@login_required
+@permission_required("workflows.create")
 def upload_workflow():
+    """Import a DAGonStar JSON document, a Python program, or a ZIP application."""
     uploaded = request.files.get("workflow_file")
     if not uploaded or not uploaded.filename:
-        flash("Choose a workflow JSON file to upload.", "warning")
+        flash("Choose a workflow file to upload.", "warning")
         return redirect(url_for("workflows.list_workflows"))
+    limit = int(settings.get("max_upload_mb") or 50) * 1024 * 1024
+    raw = uploaded.read(limit + 1)
+    filename = uploaded.filename
+    warnings: list[str] = []
     try:
-        raw_document = uploaded.read(1_000_001)
-        if len(raw_document) > 1_000_000:
-            raise ValueError("Workflow file is too large.")
-        document = json.loads(raw_document)
+        if len(raw) > limit:
+            raise ValueError("The file is larger than the upload limit.")
+        dagon_ini: dict | None = None
+        if filename.lower().endswith((".py", ".zip")):
+            document, warnings = import_python_files(read_upload(filename, raw), fallback_name=re.sub(r"[^A-Za-z0-9_-]+", "_", Path(filename).stem) or "imported_workflow")
+            dagon_ini = document.pop("dagon_ini", None)
+            source = "python"
+        else:
+            document = json.loads(raw)
+            source = "json"
         if not isinstance(document, dict) or not isinstance(document.get("tasks"), dict):
             raise ValueError("Unsupported DAGonStar workflow JSON format.")
         name = document.get("name")
         if not isinstance(name, str):
             raise ValueError("Workflow name is invalid.")
-        workflow = Workflow(owner_id=current_user.id, name=validate_dagonstar_name(name, "Workflow name"), description=str(document.get("description", "")), is_public=bool(document.get("is_public", False)))
+        workflow = Workflow(owner_id=current_user.id, name=validate_dagonstar_name(name, "Workflow name"), description=str(document.get("description", "")), is_public=bool(document.get("is_public", False)) and current_user.can("workflows.publish"))
+        if source == "python" and not workflow.description:
+            workflow.description = str((document.get("dagonweb") or {}).get("python", {}).get("docstring", ""))[:2000]
+        if dagon_ini:
+            workflow.dagon_ini = {str(section): {str(key): str(value) for key, value in values.items()} for section, values in dagon_ini.items() if isinstance(values, dict)}
         db.session.add(workflow)
         db.session.flush()
-        apply_workflow_document(workflow, document, auto_layout=True)
+        has_layout = all(isinstance((entry.get("dagonweb") or {}).get("x"), int) for entry in document["tasks"].values())
+        apply_workflow_document(workflow, document, auto_layout=source == "json" or not has_layout)
+        audit.record("workflow.import", workflow.name, f"{source} from {filename[:120]}")
         db.session.commit()
-    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+    except PythonImportError as exc:
         db.session.rollback()
-        flash("The uploaded file is not a valid DAGonWeb workflow document.", "danger")
+        flash(f"Python import failed: {exc}", "danger")
         return redirect(url_for("workflows.list_workflows"))
-    flash("Workflow uploaded.", "success")
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        db.session.rollback()
+        detail = f" ({exc})" if isinstance(exc, ValueError) and not isinstance(exc, json.JSONDecodeError) else ""
+        flash(f"The uploaded file is not a valid DAGonWeb workflow document{detail}.", "danger")
+        return redirect(url_for("workflows.list_workflows"))
+    flash("Workflow imported." + (" " + " ".join(warnings) if warnings else ""), "warning" if warnings else "success")
     return redirect(url_for("workflows.editor", workflow_id=workflow.id))
 
+
 def start_run_thread(workflow_id: int, run_id: int, resume: bool = False) -> None:
-    app = current_app._get_current_object()
+    """Hand a run to the configured execution backend (threads or Redis)."""
+    from ..executor.dispatch import submit_run
 
-    def execute_in_background() -> None:
-        with app.app_context():
-            try:
-                workflow = db.session.get(Workflow, workflow_id)
-                workflow_run = db.session.get(WorkflowRun, run_id)
-                if workflow and workflow_run:
-                    execute_workflow(workflow, workflow_run.user_id, workflow_run, resume=resume)
-            except Exception as exc:
-                db.session.rollback()
-                workflow_run = db.session.get(WorkflowRun, run_id)
-                if workflow_run:
-                    workflow_run.status = "failed"
-                    workflow_run.log = (workflow_run.log or "") + f"Unable to start DAGonStar workflow: {exc}\n"
-                    db.session.commit()
-
-    Thread(target=execute_in_background, daemon=False, name=f"DAGonWeb-run-{run_id}").start()
+    submit_run(workflow_id, run_id, resume)
 
 
 @bp.post("/<int:workflow_id>/run")
-@login_required
+@permission_required("workflows.run")
 def run_workflow(workflow_id):
     wf = db.get_or_404(Workflow, workflow_id)
     if not can_access(wf):
@@ -888,6 +841,8 @@ def run_workflow(workflow_id):
         return redirect(url_for("workflows.editor", workflow_id=wf.id))
     run = WorkflowRun(workflow_id=wf.id, user_id=current_user.id, status="pending", label=(request.form.get("label") or "").strip()[:255], scratch_path="", log="")
     db.session.add(run)
+    db.session.flush()
+    audit.record("run.start", wf.name, f"run {run.id}")
     db.session.commit()
     start_run_thread(wf.id, run.id)
     flash("Workflow run started.", "info")
@@ -895,7 +850,7 @@ def run_workflow(workflow_id):
 
 
 @bp.post("/runs/<int:run_id>/resume")
-@login_required
+@permission_required("workflows.run")
 def resume_run(run_id: int):
     run = db.get_or_404(WorkflowRun, run_id)
     if not can_manage_run(run):
@@ -998,6 +953,8 @@ def run_status(workflow_id: int, run_id: int):
         "created_at": run.created_at.isoformat() + "Z",
         "updated_at": run.updated_at.isoformat() + "Z",
         "can_resume": run.status == "failed" and can_manage_run(run),
+        "interactions": pending_interactions(run) if can_manage_run(run) else [],
+        "results": run_results(run),
         "tasks": [
             {
                 "id": task_run.id,
@@ -1010,6 +967,145 @@ def run_status(workflow_id: int, run_id: int):
             for task_run in run.task_runs
         ],
     })
+
+# ---------------------------------------------------------------- interactive tasks
+
+
+def interactive_tasks(run: WorkflowRun, kinds: tuple[str, ...]) -> dict[str, WorkflowTask]:
+    return {task.name: task for task in run.workflow.tasks if task.normalized_task_type in kinds}
+
+
+def interaction_dir(run: WorkflowRun, task_name: str) -> Path:
+    from ..executor.local import run_data_path
+
+    return run_data_path(run_file_path(run, ""), task_name)
+
+
+def pending_interactions(run: WorkflowRun) -> list[dict]:
+    """Upload/Form tasks of an active run that are still waiting for the user."""
+    if run.status not in ACTIVE_RUN_STATUSES or not run.scratch_path:
+        return []
+    states = {task_run.task_uid: task_run.status for task_run in run.task_runs}
+    pending = []
+    for name, task in interactive_tasks(run, ("upload", "form")).items():
+        try:
+            ready = (interaction_dir(run, name) / ".ready").is_file()
+        except ValueError:
+            continue
+        if ready or states.get(name) not in ("pending", "running"):
+            continue
+        config = task.config
+        item = {"task": name, "kind": task.normalized_task_type, "description": str(config.get("description") or ""), "running": states.get(name) == "running"}
+        if item["kind"] == "upload":
+            item.update({"accept": str(config.get("accept") or ""), "multiple": bool(config.get("multiple")), "max_mb": min(int(config.get("max_mb") or 50), int(settings.get("max_upload_mb") or 50)), "save_as": safe_filename(config.get("save_as"), "data.csv")})
+        else:
+            item["fields"] = form_fields(config)
+        pending.append(item)
+    return pending
+
+
+def run_results(run: WorkflowRun) -> list[dict]:
+    """Tables, charts and downloads produced by finished interactive tasks."""
+    if not run.scratch_path:
+        return []
+    results = []
+    task_runs = {task_run.task_uid: task_run for task_run in run.task_runs if task_run.status == "success"}
+    for name, task in interactive_tasks(run, ("table", "chart", "download")).items():
+        task_run = task_runs.get(name)
+        if not task_run:
+            continue
+        kind = task.normalized_task_type
+        try:
+            if kind == "download":
+                relative = f"outputs/{safe_filename(task.config.get('archive'), 'results.zip')}"
+                path = task_run_file_path(task_run, relative)
+                if path.is_file():
+                    results.append({"task": name, "kind": kind, "name": path.name, "size": path.stat().st_size, "url": url_for("workflows.download_task_run_file", task_run_id=task_run.id, path=relative)})
+                continue
+            path = task_run_file_path(task_run, f"outputs/{kind}.json")
+            if not path.is_file() or path.stat().st_size > 2_000_000:
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            continue
+        item = {"task": name, "kind": kind, "data": data, "task_run_id": task_run.id}
+        if kind == "chart":
+            item["svg_url"] = url_for("workflows.download_task_run_file", task_run_id=task_run.id, path="outputs/chart.svg")
+        if kind == "table":
+            item["csv_url"] = url_for("workflows.download_task_run_file", task_run_id=task_run.id, path="outputs/table.csv")
+        results.append(item)
+    return results
+
+
+def _accepted(filename: str, accept: str) -> bool:
+    rules = [item.strip().lower() for item in accept.split(",") if item.strip()]
+    suffixes = [rule for rule in rules if rule.startswith(".")]
+    return not suffixes or any(filename.lower().endswith(suffix) for suffix in suffixes)
+
+
+@bp.post("/runs/<int:run_id>/interact/<task_name>")
+@permission_required("workflows.run")
+def submit_interaction(run_id: int, task_name: str):
+    """Receive the files or form values an Upload/Form task waits for."""
+    run = db.get_or_404(WorkflowRun, run_id)
+    if not can_manage_run(run):
+        abort(403)
+    task = interactive_tasks(run, ("upload", "form")).get(task_name)
+    if not task:
+        abort(404)
+    if run.status not in ACTIVE_RUN_STATUSES:
+        return jsonify({"error": "The run is no longer active."}), 409
+    try:
+        target = interaction_dir(run, task.name)
+    except ValueError:
+        abort(403)
+    if (target / ".ready").is_file():
+        return jsonify({"error": "This input was already provided."}), 409
+    config = task.config
+    try:
+        if task.normalized_task_type == "upload":
+            files = [item for item in request.files.getlist("files") if item and item.filename]
+            if not files:
+                raise ValueError("Choose a file to upload.")
+            if len(files) > 1 and not config.get("multiple"):
+                raise ValueError("This task accepts a single file.")
+            limit = min(int(config.get("max_mb") or 50), int(settings.get("max_upload_mb") or 50)) * 1024 * 1024
+            accept = str(config.get("accept") or "")
+            folder = target / "files"
+            folder.mkdir(parents=True, exist_ok=True)
+            saved = []
+            for item in files:
+                original = secure_filename(item.filename) or "upload.dat"
+                if not _accepted(original, accept):
+                    raise ValueError(f"{original}: accepted types are {accept}.")
+                name = original if config.get("multiple") else safe_filename(config.get("save_as"), "data.csv")
+                destination = safe_child(folder, name)
+                written = 0
+                with destination.open("wb") as handle:
+                    while chunk := item.stream.read(1024 * 1024):
+                        written += len(chunk)
+                        if written > limit:
+                            raise ValueError(f"{original} is larger than {limit // (1024 * 1024)} MB.")
+                        handle.write(chunk)
+                saved.append(name)
+            detail = ", ".join(saved)
+        else:
+            payload = request.get_json(silent=True)
+            raw = payload if isinstance(payload, dict) else request.form.to_dict()
+            values = coerce_form_values(form_fields(config), raw)
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "form.json").write_text(form_document(values), encoding="utf-8")
+            (target / "form.env").write_text(form_env(values), encoding="utf-8")
+            detail = ", ".join(values)
+    except ValueError as exc:
+        shutil.rmtree(target / "files", ignore_errors=True)
+        return jsonify({"error": str(exc)}), 400
+    (target / ".ready").touch()
+    run.log = (run.log or "") + timestamped_log(f"Input for {task.name} provided by {current_user.name}.")
+    audit.record("run.interaction", f"{run.workflow.name}/{task.name}", detail[:500])
+    db.session.commit()
+    return jsonify({"status": "ok"})
+
 
 @bp.get("/files")
 @login_required

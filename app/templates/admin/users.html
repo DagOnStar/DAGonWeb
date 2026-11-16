@@ -1,1 +1,21 @@
-{% extends 'base.html' %}{% block content %}<div class="d-flex justify-content-between"><h1>Users</h1><a class="btn btn-primary" href="{{ url_for('admin.user_new') }}">New user</a></div><table class="table"><tr><th>Email</th><th>Name</th><th>Roles</th><th>Active</th><th></th></tr>{% for user in users %}<tr><td>{{ user.email }}</td><td>{{ user.name }}</td><td>{{ user.roles|map(attribute='name')|join(', ') }}</td><td>{{ user.active }}</td><td><a href="{{ url_for('admin.user_edit', user_id=user.id) }}">Edit</a><form method="post" action="{{ url_for('admin.user_delete', user_id=user.id) }}" class="d-inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-link text-danger">Delete</button></form></td></tr>{% endfor %}</table>{% endblock %}
+{% extends 'admin/_layout.html' %}
+{% block admin_content %}
+<div class="page-header"><div><h1 class="h3">Users</h1><p class="page-subtitle">Local and single sign-on accounts, their roles and last activity.</p></div>
+  <a class="btn btn-primary" href="{{ url_for('admin.user_new') }}">New user</a></div>
+<form class="mb-2" method="get"><label class="visually-hidden" for="userSearch">Search users</label><input class="form-control form-control-sm" style="max-width:20rem" id="userSearch" type="search" name="q" value="{{ search }}" placeholder="Search by name or email"></form>
+<div class="card"><div class="table-responsive"><table class="table table-sm align-middle mb-0">
+  <thead><tr><th scope="col">User</th><th scope="col">Sign-in</th><th scope="col">Roles</th><th scope="col">Last login</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+  <tbody>
+  {% for user in users %}
+    <tr>
+      <td><div class="fw-semibold">{{ user.name }}</div><div class="small text-body-secondary text-break">{{ user.email }}</div></td>
+      <td><span class="badge text-bg-light border">{{ user.auth_provider }}</span></td>
+      <td>{% for role in user.roles %}<span class="badge {{ 'text-bg-danger' if role.name == 'admin' else 'text-bg-secondary' }} me-1">{{ role.name }}</span>{% endfor %}</td>
+      <td class="small text-nowrap">{{ user.last_login_at.strftime('%Y-%m-%d %H:%M') if user.last_login_at else 'never' }}</td>
+      <td>{% if user.active %}<span class="badge text-bg-success">active</span>{% else %}<span class="badge text-bg-secondary">disabled</span>{% endif %}</td>
+      <td class="text-end text-nowrap"><a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin.user_edit', user_id=user.id) }}">Edit</a>
+        {% if user.id != current_user.id %}<form method="post" action="{{ url_for('admin.user_delete', user_id=user.id) }}" class="d-inline" onsubmit="return confirm('Delete {{ user.email }}?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-danger">Delete</button></form>{% endif %}</td>
+    </tr>
+  {% else %}<tr><td colspan="6" class="text-body-secondary">No users match.</td></tr>{% endfor %}
+  </tbody></table></div></div>
+{% endblock %}

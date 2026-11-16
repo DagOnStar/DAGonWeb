@@ -1,7 +1,19 @@
+# DAGonWeb with SQLite and in-process run threads (the default).
+#   cp .env.example .env   # then edit SECRET_KEY and the admin account
+#   docker compose up --build
+# Overlays:
+#   -f docker-compose.postgres.yml   PostgreSQL instead of SQLite
+#   -f docker-compose.mysql.yml      MySQL/MariaDB instead of SQLite
+#   -f docker-compose.redis.yml      Redis queue + scalable run workers
 services:
   dagonweb:
     build: .
-    env_file: .env
+    image: ${DAGONWEB_IMAGE:-dagonweb:local}
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      SCRATCH_DIR: ${SCRATCH_DIR:-/scratch/dagonweb}
     ports:
       - "8000:8000"
     volumes:

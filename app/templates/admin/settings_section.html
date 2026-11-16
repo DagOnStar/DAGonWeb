@@ -1,0 +1,95 @@
+{% extends 'admin/_layout.html' %}
+{% block admin_content %}
+<div class="page-header"><div><h1 class="h3">{{ title }}</h1><p class="page-subtitle">{{ description }}</p></div></div>
+
+{% if section == 'appearance' %}
+<section class="card mb-3"><div class="card-body d-flex flex-wrap gap-3 align-items-center">
+  <img src="{{ branding.logo_url }}" alt="Current logo" width="64" height="64" class="rounded border p-1 bg-body">
+  <form method="post" action="{{ url_for('admin.upload_logo') }}" enctype="multipart/form-data" class="d-flex flex-wrap gap-2 align-items-end">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div><label class="form-label small" for="logoFile">Logo ({{ logo_types }}, max 512 KB)</label><input class="form-control form-control-sm" type="file" id="logoFile" name="logo" accept="image/png,image/jpeg,image/webp,image/svg+xml"></div>
+    <button class="btn btn-sm btn-primary">Upload logo</button>
+    {% if has_logo %}<button class="btn btn-sm btn-outline-danger" name="remove" value="1">Use default logo</button>{% endif %}
+  </form>
+</div></section>
+{% endif %}
+
+{% if section == 'execution' %}
+<section class="card mb-3"><div class="card-header">Status</div><div class="card-body small">
+  <p class="mb-2">Dispatcher: <strong>{{ status.backend }}</strong>
+  {% if status.redis %}{% if status.redis.ok %} · <span class="badge text-bg-success">Redis reachable</span> · queue <code>{{ status.redis.queue }}</code>: {{ status.redis.queued }} waiting, {{ status.redis.workers }} worker(s){% if not status.redis.workers %} <span class="text-warning-emphasis">— start one with <code>flask --app wsgi worker</code></span>{% endif %}{% else %} · <span class="badge text-bg-danger">Redis unreachable</span> <span class="text-body-secondary">{{ status.redis.error }}</span>{% endif %}{% endif %}</p>
+  <div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th scope="col">DAGonStar back-end</th><th scope="col">Client on this host</th></tr></thead><tbody>
+  {% for tool in status.tools %}<tr><td>{{ tool.label }}</td><td>{% if tool.path %}<span class="badge text-bg-success">found</span> <code>{{ tool.path }}</code>{% else %}<span class="badge text-bg-secondary">not found</span>{% endif %}</td></tr>{% endfor %}
+  </tbody></table></div>
+  <p class="mb-0 mt-2 text-body-secondary">Back-end endpoints, credentials and partitions live in <a href="{{ url_for('admin.dagon_ini') }}">dagon.ini</a>. Workflows can run in portable emulation when a client is missing.</p>
+</div></section>
+{% endif %}
+
+{% if section == 'storage' %}
+<section class="card mb-3"><div class="card-body small">
+  <div class="row g-3">
+    <div class="col-md-6"><div class="fw-semibold">Scratch volume</div><code class="text-break">{{ storage.root }}</code>
+      <div class="progress my-1" role="progressbar" aria-label="Disk usage" aria-valuenow="{{ storage.used_pct }}" aria-valuemin="0" aria-valuemax="100"><div class="progress-bar" style="width: {{ storage.used_pct }}%"></div></div>
+      {{ '%.1f'|format(storage.free_gb) }} GB free of {{ '%.1f'|format(storage.total_gb) }} GB · {{ storage.runs }} run record(s)</div>
+    <div class="col-md-6"><div class="fw-semibold">Database ({{ storage.database_backend }})</div><code class="text-break">{{ storage.database }}</code>
+      <div class="text-body-secondary mt-1">Set with <code>DATABASE_URL</code>; SQLite is the default. Apply schema changes with <code>flask --app wsgi db upgrade</code>.</div></div>
+  </div>
+  <form method="post" action="{{ url_for('admin.storage_cleanup') }}" class="mt-3" onsubmit="return confirm('Delete finished runs older than the retention period, with their scratch files?');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-danger">Apply retention now</button>
+  </form>
+</div></section>
+{% endif %}
+
+{% if section == 'authentication' %}
+<div class="alert alert-info small">Register these redirect URIs with the identity providers:
+  <ul class="mb-0">{% for key, value in callback_urls.items() %}<li>{{ {'google': 'Google', 'microsoft': 'Microsoft', 'oidc': 'OpenID Connect'}[key] }}: <code class="text-break">{{ value }}</code></li>{% endfor %}</ul></div>
+{% endif %}
+
+<form method="post" class="card settings-form" novalidate>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="card-body">
+  {% set ns = namespace(group=None) %}
+  {% for row in rows %}
+    {% set d = row.def %}
+    {% if d.group and d.group != ns.group %}{% set ns.group = d.group %}<h2 class="h6 text-uppercase text-body-secondary mt-3 mb-2 settings-group">{{ d.group }}</h2>{% endif %}
+    {% set value = submitted.get(d.key, row.value) if submitted is not none and not d.secret and d.kind != 'bool' else row.value %}
+    {% set field_id = 'setting_' ~ d.key %}
+    <div class="mb-3 {% if d.kind != 'bool' %}row g-2 align-items-start{% endif %}">
+      {% if d.kind == 'bool' %}
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" role="switch" id="{{ field_id }}" name="{{ d.key }}" value="true" {% if (submitted.get(d.key) if submitted is not none else value) %}checked{% endif %} {% if row.overridden %}disabled{% endif %}>
+          <label class="form-check-label" for="{{ field_id }}">{{ d.label }}</label>
+        </div>
+      {% else %}
+        <label class="col-md-4 col-form-label col-form-label-sm fw-semibold" for="{{ field_id }}">{{ d.label }}</label>
+        <div class="col-md-8">
+          {% if d.kind == 'select' %}
+            <select class="form-select form-select-sm {% if errors.get(d.key) %}is-invalid{% endif %}" id="{{ field_id }}" name="{{ d.key }}" {% if row.overridden %}disabled{% endif %}>{% for option, text in d.options %}<option value="{{ option }}" {% if option == value %}selected{% endif %}>{{ text }}</option>{% endfor %}</select>
+          {% elif d.kind == 'textarea' %}
+            <textarea class="form-control form-control-sm {% if errors.get(d.key) %}is-invalid{% endif %}" id="{{ field_id }}" name="{{ d.key }}" rows="3" {% if row.overridden %}disabled{% endif %}>{{ value }}</textarea>
+          {% elif d.kind == 'color' %}
+            <div class="d-flex gap-2"><input type="color" class="form-control form-control-color" id="{{ field_id }}" name="{{ d.key }}" value="{{ value }}" {% if row.overridden %}disabled{% endif %}><code class="align-self-center">{{ value }}</code></div>
+          {% elif d.kind == 'password' %}
+            <input type="password" class="form-control form-control-sm {% if errors.get(d.key) %}is-invalid{% endif %}" id="{{ field_id }}" name="{{ d.key }}" autocomplete="new-password" placeholder="{{ '•••••••• (stored — leave empty to keep)' if row.has_secret else 'Not set' }}" {% if row.overridden %}disabled{% endif %}>
+            {% if row.has_secret and not row.overridden %}<div class="form-check mt-1"><input class="form-check-input" type="checkbox" id="{{ field_id }}_clear" name="{{ d.key }}__clear" value="1"><label class="form-check-label small" for="{{ field_id }}_clear">Remove the stored secret</label></div>{% endif %}
+          {% else %}
+            <input type="{{ {'int': 'number', 'number': 'number', 'url': 'url', 'email': 'email'}.get(d.kind, 'text') }}" {% if d.kind == 'number' %}step="any"{% endif %} {% if d.minimum is not none %}min="{{ d.minimum }}"{% endif %} {% if d.maximum is not none %}max="{{ d.maximum }}"{% endif %} class="form-control form-control-sm {% if errors.get(d.key) %}is-invalid{% endif %}" id="{{ field_id }}" name="{{ d.key }}" value="{{ value }}" {% if row.overridden %}disabled{% endif %}>
+          {% endif %}
+          {% if errors.get(d.key) %}<div class="invalid-feedback d-block">{{ errors[d.key] }}</div>{% endif %}
+        </div>
+      {% endif %}
+      {% if d.help or row.overridden %}<div class="form-text {% if d.kind != 'bool' %}offset-md-4 col-md-8{% endif %}">{{ d.help|safe }}{% if row.overridden %} <span class="badge text-bg-warning">Set by environment variable <code>{{ d.env_name }}</code></span>{% endif %}</div>{% endif %}
+    </div>
+  {% endfor %}
+  </div>
+  <div class="card-footer d-flex flex-wrap gap-2">
+    <button class="btn btn-primary">Save {{ title|lower }} settings</button>
+  </div>
+</form>
+{% if section in ('smtp', 'llm') %}
+<form method="post" action="{{ url_for('admin.test_smtp' if section == 'smtp' else 'admin.test_llm') }}" class="mt-2">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button class="btn btn-outline-secondary btn-sm">{{ 'Send a test message to ' ~ current_user.email if section == 'smtp' else 'Test the LLM connection' }}</button>
+</form>
+{% endif %}
+{% endblock %}

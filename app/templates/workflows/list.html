@@ -20,7 +20,8 @@
         {% endfor %}
       </ul>
     </div>
-    <button class="btn btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#importPanel" aria-expanded="false" aria-controls="importPanel">Import JSON</button>
+    {% if current_user.can('assistant.use') %}<a class="btn btn-outline-primary" href="{{ url_for('workflows.create_workflow', assistant=1) }}">✨ Design with assistant</a>{% endif %}
+    <button class="btn btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#importPanel" aria-expanded="false" aria-controls="importPanel">Import</button>
     {% if workflows %}
     <form method="post" action="{{ url_for('workflows.delete_all_workflows') }}" onsubmit="return confirm('Delete all workflows you can manage, including their runs and scratch files?');">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -33,11 +34,11 @@
 <form id="importPanel" class="collapse card card-body mb-3" method="post" action="{{ url_for('workflows.upload_workflow') }}" enctype="multipart/form-data">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <label class="dropzone" id="dropzone" for="workflow_file">
-    <strong>Import workflow JSON</strong><br>
-    <span class="small">Drop a DAGonStar or DAGonWeb task-map document here, or choose a file. Dependencies are rebuilt from <code>workflow://</code> references and <code>explicit_prevs</code>.</span>
+    <strong>Import a workflow</strong><br>
+    <span class="small">Drop a DAGonStar/DAGonWeb JSON document, a DAGonStar Python program (<code>.py</code>), or a ZIP with a Python application here. Python is read, never executed: <code>Workflow(...)</code>, <code>DagonTask(...)</code> and <code>add_dependency_to</code> become the workflow; dependencies are rebuilt from <code>workflow://</code> references and <code>explicit_prevs</code>.</span>
   </label>
   <div class="row g-2 align-items-center mt-2">
-    <div class="col"><input id="workflow_file" class="form-control" type="file" name="workflow_file" accept="application/json,.json" required></div>
+    <div class="col"><input id="workflow_file" class="form-control" type="file" name="workflow_file" accept="application/json,.json,.py,text/x-python,.zip,application/zip" required></div>
     <div class="col-auto"><button class="btn btn-primary">Upload</button></div>
   </div>
 </form>

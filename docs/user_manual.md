@@ -4,11 +4,11 @@
 
 Create a workflow from the Workflows page in one of three ways:
 
-- Pick a template from the gallery. There is one runnable template per DAGonStar task type.
-- Drop or choose a DAGonStar JSON document in the import area. The [examples/](../examples) folder has one for every task type.
-- Use **New workflow** to start from an empty canvas.
+- Pick a template from the gallery. There is one runnable template per task type.
+- Drop or choose a file in the import area: a DAGonStar JSON document, a DAGonStar Python program (`.py`), or a ZIP of a DAGonStar application. See [Import and export](import_export.md). The [examples/](../examples) folder has a JSON document for every task type.
+- Use **New workflow** to start from an empty canvas, or **✨ Design with assistant** to describe the workflow to the [LLM assistant](assistant.md) (when an administrator has enabled it).
 
-Each workflow card shows the task types it uses and the status of its last run. From the card you can open the editor, run the workflow, or open **Setup**. The **More** menu has **Edit metadata**, **Rename**, **Download JSON**, **Generate Python**, **Export CWL**, and **Delete**. Use the filter box to find workflows by name, owner or task type. The toolbar also provides **Delete all** for workflows the signed-in user is allowed to manage.
+Each workflow card shows the task types it uses and the status of its last run. From the card you can open the editor, run the workflow, or open **Setup**. The **More** menu has **Edit metadata**, **Rename**, the exports (JSON, Python, headless application ZIP, CWL), and **Delete**. Use the filter box to find workflows by name, owner or task type. The toolbar also provides **Delete all** for workflows the signed-in user is allowed to manage.
 
 Public workflows can be opened and run by other signed-in users, but only the owner or an administrator can edit metadata or delete them. Administrators can manage every workflow.
 
@@ -27,6 +27,14 @@ To connect tasks, drag the right connector of a producer to the left connector o
 
 Click a link to remove it. See the [workflow editor](workflow_editor.md) for the keyboard shortcuts.
 
+### Interactive tasks
+
+The **DAGonWeb interactive** palette category adds Upload, Form, Table, Chart and Download tasks. Upload and Form pause the run until someone provides files or answers on the run page; Table, Chart and Download show results there. See [Interactive tasks](interactive_tasks.md).
+
+### Assistant
+
+**✨ Assistant** in the editor toolbar opens a chat panel. Ask it to design, change, explain or fix the workflow; it edits a draft, dry-runs it, and shows the result. **Apply to canvas** saves the draft; **Check workflow** runs the dry run on the current canvas. See [Workflow assistant](assistant.md).
+
 ### Batch scripts
 
 Batch tasks use the Ace Bash editor. Named inputs become shell variables, so an input `data = workflow:///extract/data.txt` can be used as `$data` in the script. While the editor has focus, clicking a canvas task inserts `workflow:///task/output` at the cursor. Replace `output` with the actual producer-relative output path when needed, for example:
@@ -42,6 +50,7 @@ Click **Run** to open the run page immediately. DAGonStar executes the workflow 
 - The graph, the progress bar, and the live log update.
 - Each task shows its current stage: staging inputs, executing, or staging outputs.
 - The log of a failed task includes the captured error.
+- Upload and Form tasks show a card where you provide their input; tables, charts and download buttons appear when the tasks that produce them finish.
 
 If a run fails, fix the task and press **Resume**. DAGonStar reuses the outputs of the tasks that completed, using the run's checkpoint, and runs only the rest. **Run again** always starts a fresh run.
 
@@ -62,4 +71,4 @@ When a task finishes, click its graph node to inspect its scratch directory. You
 
 ## Permissions and safety
 
-Users manage their own workflows and runs. Administrators can manage all workflows, users, roles, and the scratch setting. A Batch command is executable code: only run workflows from trusted users and deploy untrusted workloads in isolated infrastructure.
+Users manage their own workflows and runs. Administrators can manage all workflows, users, roles, and the site settings (see [Administration](administration.md)). What each user may do (create, run, publish, use the assistant) depends on the permissions of their roles. A Batch command is executable code: only run workflows from trusted users and deploy untrusted workloads in isolated infrastructure.

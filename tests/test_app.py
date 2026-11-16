@@ -96,9 +96,8 @@ def test_admin_setup_saves_smtp_settings():
         session["_fresh"] = True
 
     response = client.post(
-        "/admin/settings",
+        "/admin/settings/smtp",
         data={
-            "scratch_dir": "/scratch/dagonweb",
             "smtp_host": "smtp.example.org",
             "smtp_port": "587",
             "smtp_from": "dagonweb@example.org",
@@ -174,7 +173,7 @@ def test_workflow_link_uri_contract():
 
 
 def test_every_task_type_has_a_palette_label():
-    expected_types = {"checkpoint", "batch", "slurm", "cloud", "docker", "kubernetes", "apptainer", "nomad", "llm", "native", "web", "faas", "iot", "agentic"}
+    expected_types = {"checkpoint", "batch", "slurm", "cloud", "docker", "kubernetes", "apptainer", "nomad", "llm", "native", "web", "faas", "iot", "agentic", "upload", "form", "table", "chart", "download"}
     assert {task_type.value for task_type in TaskType} == expected_types
     assert set(TASK_TYPE_LABELS) == expected_types
 
@@ -628,7 +627,7 @@ def test_python_generator_creates_direct_dagonstar_task_code():
     task.config = {"command": "echo hello > a.txt"}
     workflow.tasks.append(task)
     source = workflow_python_source(workflow)
-    assert "DagonTask(TaskType.BATCH, 'a', 'echo hello > a.txt')" in source
+    assert "task_a = DagonTask(\n        TaskType.BATCH,\n        'a',\n        'echo hello > a.txt',\n    )" in source
     assert "workflow.add_task(task_a)" in source
     compile(source, "generated_workflow.py", "exec")
 

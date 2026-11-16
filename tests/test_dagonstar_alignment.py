@@ -55,7 +55,11 @@ def new_workflow(name: str, template: str | None = None) -> Workflow:
 def test_registry_covers_every_dagonstar_task_type():
     from dagon.task import TaskType as DagonTaskType
 
-    assert {member.value for member in DagonTaskType} == set(TASK_SPECS) == {member.value for member in TaskType}
+    native = {key for key, spec in TASK_SPECS.items() if not spec.interactive}
+    assert {member.value for member in DagonTaskType} == native
+    assert set(TASK_SPECS) == {member.value for member in TaskType}
+    # DAGonWeb interactive types always run as a DAGonStar type.
+    assert {spec.runtime_type for spec in TASK_SPECS.values()} <= {member.value for member in DagonTaskType}
     grouped = [spec["type"] for group in palette() for spec in group["types"]]
     assert sorted(grouped) == sorted(TASK_SPECS)
     for spec in TASK_SPECS.values():
@@ -76,7 +80,7 @@ def test_default_configuration_builds_a_dagonstar_task(task_type, tmp_path, monk
         (tmp_path / "workflow_functions.py").write_text(default_config["source"], encoding="utf-8")
         monkeypatch.syspath_prepend(str(tmp_path))
     args, kwargs = dagon_task_arguments(task_type, spec.default_name, default_config)
-    task = DagonTask(DagonTaskType[task_type.upper()], *args, **kwargs)
+    task = DagonTask(DagonTaskType[spec.runtime_type.upper()], *args, **kwargs)
     runtime.add_task(task)
     runtime.make_dependencies()
     assert task.name == spec.default_name
@@ -159,11 +163,35 @@ def test_explicit_dependencies_round_trip_and_reach_dagonstar(app):
         validate_graph_payload({"tasks": {"a": {"name": "a", "type": "batch", "explicit_prevs": ["ghost"]}}})
 
 
+def provide_interactive_inputs(workflow: Workflow, run: WorkflowRun) -> None:
+    """Pre-fill what Upload/Form tasks wait for, as the run page would."""
+    from app.interactive import form_document, form_env, form_fields
+    from app.executor.local import run_data_path, scratch_root
+
+    run_dir = scratch_root() / f"workflow-{workflow.id}" / f"run-{run.id}"
+    for task in workflow.tasks:
+        target = run_data_path(run_dir, task.name)
+        if task.normalized_task_type == "upload":
+            (target / "files").mkdir(parents=True, exist_ok=True)
+            (target / "files" / task.config.get("save_as", "data.csv")).write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
+            (target / ".ready").touch()
+        elif task.normalized_task_type == "form":
+            target.mkdir(parents=True, exist_ok=True)
+            values = {field["name"]: field["default"] for field in form_fields(task.config)}
+            (target / "form.json").write_text(form_document(values), encoding="utf-8")
+            (target / "form.env").write_text(form_env(values), encoding="utf-8")
+            (target / ".ready").touch()
+
+
 @pytest.mark.parametrize("template", sorted(TASK_SPECS))
 def test_every_template_runs_end_to_end(app, template):
     with app.app_context():
         workflow = new_workflow(f"E2E_{template}", template)
-        run = execute_workflow(workflow, workflow.owner_id)
+        run = WorkflowRun(workflow_id=workflow.id, user_id=workflow.owner_id, status="pending", scratch_path="", log="")
+        db.session.add(run)
+        db.session.commit()
+        provide_interactive_inputs(workflow, run)
+        run = execute_workflow(workflow, workflow.owner_id, run)
         assert run.status == "success", run.log
         scratch = Path(run.scratch_path)
         assert run.task_runs and all(task_run.status == "success" for task_run in run.task_runs)
@@ -173,6 +201,12 @@ def test_every_template_runs_end_to_end(app, template):
         if template == "batch":
             merge = next(task_run for task_run in run.task_runs if task_run.task_uid == "merge")
             assert (Path(merge.scratch_path) / "result.txt").read_text(encoding="utf-8") == "HELLO\nolleh\n"
+        if template == "form":
+            use = next(task_run for task_run in run.task_runs if task_run.task_uid == "use_values")
+            assert (Path(use.scratch_path) / "summary.txt").read_text(encoding="utf-8") == "Threshold 0.5 for experiment\n"
+        if template in ("table", "chart", "upload", "download"):
+            produced = {path.name for task_run in run.task_runs for path in Path(task_run.scratch_path).glob("outputs/*")}
+            assert {"table.json", "chart.json", "chart.svg", "results.zip"} & produced
 
 
 def test_failed_task_error_is_logged_and_run_resumes_from_checkpoint(app):
@@ -206,7 +240,8 @@ def test_generated_python_program_runs_with_dagonstar(app, tmp_path):
     with app.app_context():
         workflow = new_workflow("Generated", "batch")
         source = workflow_python_source(workflow)
-    assert "DagonTask(TaskType.BATCH, 'transform_a', 'data=workflow:///extract/data.txt ;\\ntr a-z A-Z < $data > a.txt')" in source
+    assert "TaskType.BATCH,\n        'transform_a',\n        (\n            'data=workflow:///extract/data.txt ;\\n'\n            'tr a-z A-Z < $data > a.txt'\n        ),\n    )" in source
+    assert "# Reads: workflow:///extract/data.txt" in source
     program = tmp_path / "Generated.py"
     program.write_text(source, encoding="utf-8")
     completed = subprocess.run([sys.executable, str(program)], cwd=tmp_path, capture_output=True, text=True, timeout=120)

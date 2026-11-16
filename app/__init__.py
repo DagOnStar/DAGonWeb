@@ -6,12 +6,12 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import click
-from flask import Flask, redirect, send_from_directory, url_for
+from flask import Flask, abort, redirect, send_file, send_from_directory, url_for
 from flask_login import current_user
 from .config import Config
 from .dagon_ini import DEFAULT_DAGON_INI
 from .extensions import db, migrate, login_manager, csrf
-from .models import Role, Setting, User
+from .models import DEFAULT_USER_PERMISSIONS, PERMISSIONS, Role, Setting, User
 
 
 def create_app(config_object: type[Config] = Config) -> Flask:
@@ -34,10 +34,31 @@ def create_app(config_object: type[Config] = Config) -> Flask:
     from .auth.routes import bp as auth_bp
     from .admin.routes import bp as admin_bp
     from .workflows.routes import bp as workflows_bp
+    from .agents.routes import bp as assistant_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_bp, url_prefix="/admin")
     app.register_blueprint(workflows_bp, url_prefix="/workflows")
+    app.register_blueprint(assistant_bp, url_prefix="/assistant")
+
+    @app.errorhandler(403)
+    def forbidden(_error):
+        from flask import render_template
+
+        return render_template("errors/403.html"), 403
+
+    @app.route("/branding/logo")
+    def branding_logo():
+        from .branding import LOGO_TYPES, logo_path
+
+        path = logo_path()
+        if not path:
+            abort(404)
+        response = send_file(path, mimetype=LOGO_TYPES[path.suffix.lower()], max_age=3600)
+        # An uploaded SVG is only ever an image: no scripts, no navigation.
+        response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     @login_manager.user_loader
     def load_user(user_id: str) -> User | None:
@@ -63,8 +84,43 @@ def create_app(config_object: type[Config] = Config) -> Flask:
         dagonstar_version = "unknown"
 
     @app.context_processor
-    def inject_versions() -> dict[str, str]:
-        return {"dagonstar_version": dagonstar_version}
+    def inject_versions() -> dict:
+        from .branding import branding
+
+        try:
+            values = branding()
+        except Exception:  # database not migrated yet
+            db.session.rollback()
+            values = {"site_name": "DAGonWeb", "tagline": "", "footer_text": "", "default_theme": "auto", "brand_color": "#2457d6", "navbar_color": "#0f1b33", "logo_url": url_for("static", filename="icons/icon.svg")}
+        return {"dagonstar_version": dagonstar_version, "branding": values}
+
+    @app.cli.command("worker")
+    @click.option("--burst", is_flag=True, help="Exit when the queue is empty.")
+    @click.option("--simple", is_flag=True, help="Run jobs in the worker process instead of forking (needed on macOS).")
+    def worker(burst: bool, simple: bool) -> None:
+        """Process queued workflow runs from Redis (execution backend ``redis``)."""
+        from rq import SimpleWorker, Worker
+
+        from .executor.dispatch import redis_connection, redis_queue
+
+        connection = redis_connection()
+        queue = redis_queue(connection)
+        worker_class = SimpleWorker if simple else Worker
+        print(f"DAGonWeb worker listening on '{queue.name}' at {connection.connection_pool.connection_kwargs.get('host', 'redis')}")
+        worker_class([queue], connection=connection).work(burst=burst)
+
+    @app.cli.command("cleanup-runs")
+    @click.option("--days", type=int, default=None, help="Override the configured retention period.")
+    def cleanup_runs_command(days: int | None) -> None:
+        """Delete finished runs older than the retention period."""
+        from . import settings
+        from .maintenance import cleanup_runs
+
+        retention = days if days is not None else int(settings.get("run_retention_days") or 0)
+        if retention <= 0:
+            print("Run retention is disabled (0 days).")
+            return
+        print(f"Removed {cleanup_runs(retention)} run(s) older than {retention} days.")
 
     @app.cli.command("seed")
     def seed() -> None:
@@ -92,7 +148,11 @@ def create_app(config_object: type[Config] = Config) -> Flask:
 
 def seed_defaults(app: Flask) -> None:
     admin = Role.query.filter_by(name="admin").first() or Role(name="admin", description="Administrators")
-    user_role = Role.query.filter_by(name="user").first() or Role(name="user", description="Standard users")
+    user_role = Role.query.filter_by(name="user").first()
+    if user_role is None:
+        user_role = Role(name="user", description="Standard users")
+        user_role.permissions = DEFAULT_USER_PERMISSIONS
+    admin.permissions = list(PERMISSIONS)
     db.session.add_all([admin, user_role])
     db.session.flush()
     email = os.getenv("ADMIN_EMAIL", "admin@example.org")
@@ -105,15 +165,4 @@ def seed_defaults(app: Flask) -> None:
         db.session.add(user)
     if not Setting.query.filter_by(key="scratch_dir").first():
         db.session.add(Setting(key="scratch_dir", value=app.config["SCRATCH_DIR"]))
-    defaults = {
-        "smtp_host": "",
-        "smtp_port": "587",
-        "smtp_from": "noreply@localhost",
-        "smtp_user": "",
-        "smtp_password": "",
-        "smtp_tls": "true",
-    }
-    for key, value in defaults.items():
-        if not Setting.query.filter_by(key=key).first():
-            db.session.add(Setting(key=key, value=value))
     db.session.commit()
