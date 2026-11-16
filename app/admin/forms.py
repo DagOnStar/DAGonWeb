@@ -1,29 +1,29 @@
 from flask_wtf import FlaskForm
-from wtforms import BooleanField, IntegerField, PasswordField, SelectMultipleField, StringField, SubmitField, TextAreaField
-from wtforms.validators import DataRequired, Email, Length, NumberRange, Optional
+from wtforms import BooleanField, PasswordField, SelectMultipleField, StringField, SubmitField, TextAreaField
+from wtforms.validators import DataRequired, Email, Length, Optional, Regexp
+from wtforms.widgets import CheckboxInput, ListWidget
+
+
+class MultiCheckboxField(SelectMultipleField):
+    widget = ListWidget(prefix_label=False)
+    option_widget = CheckboxInput()
+
 
 class RoleForm(FlaskForm):
-    name = StringField("Name", validators=[DataRequired(), Length(max=80)])
+    name = StringField("Name", validators=[DataRequired(), Length(max=80), Regexp(r"^[a-z0-9_-]+$", message="Use lower-case letters, digits, - and _.")])
     description = StringField("Description", validators=[Optional(), Length(max=255)])
+    permissions = MultiCheckboxField("Permissions")
     submit = SubmitField("Save role")
+
 
 class UserForm(FlaskForm):
     name = StringField("Name", validators=[DataRequired(), Length(max=255)])
     email = StringField("Email", validators=[DataRequired(), Email(), Length(max=255)])
     password = PasswordField("Password", validators=[Optional(), Length(min=8)])
     active = BooleanField("Active", default=True)
-    roles = SelectMultipleField("Roles", coerce=int)
+    roles = MultiCheckboxField("Roles", coerce=int)
+    unlink_sso = BooleanField("Unlink single sign-on identity")
     submit = SubmitField("Save user")
-
-class SettingsForm(FlaskForm):
-    scratch_dir = StringField("Scratch directory", validators=[DataRequired(), Length(max=1024)])
-    smtp_host = StringField("SMTP host", validators=[Optional(), Length(max=255)])
-    smtp_port = IntegerField("SMTP port", validators=[Optional(), NumberRange(min=1, max=65535)], default=587)
-    smtp_from = StringField("From address", validators=[Optional(), Length(max=255)])
-    smtp_user = StringField("SMTP username", validators=[Optional(), Length(max=255)])
-    smtp_password = PasswordField("SMTP password", validators=[Optional(), Length(max=255)])
-    smtp_tls = BooleanField("Use STARTTLS", default=True)
-    submit = SubmitField("Save settings")
 
 
 class DagonIniForm(FlaskForm):

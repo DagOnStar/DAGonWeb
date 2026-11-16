@@ -10,11 +10,13 @@ The project targets **DAGonStar 2.9.4** (pinned in [requirements.txt](requiremen
 
 ## Highlights
 
-- **All 14 DAGonStar task types**:
+- **All 14 DAGonStar task types, plus 5 DAGonWeb interactive types**:
   - Shell and HPC: Batch, Slurm, Checkpoint.
   - Containers: Docker, Kubernetes, Apptainer, Nomad.
   - Cloud, web and devices: Cloud, FaaS, Web, IoT.
   - Python and AI: Native, LLM, Agentic.
+  - DAGonWeb interactive: Upload, Form, Table, Chart, Download. They pause a run for files or form answers and show tables, charts and downloads on the run page, yet stay plain DAGonStar `batch` tasks in the document ([docs](docs/interactive_tasks.md)).
+- **LLM workflow assistant.** An agent with tools designs, edits and dry-runs the workflow as a draft, from a plain-language description; you apply the draft to the canvas. It works with OpenAI and any OpenAI-compatible endpoint ([docs](docs/assistant.md)).
 - **Generated from one registry.** The palette and the inspector forms come from [app/task_specs.py](app/task_specs.py), and so does the code that builds each runtime `DagonTask`.
 - **Data links and explicit dependencies.**
   - A data link is a `workflow:///task/path` reference. DAGonStar infers the edge from it and stages the file.
@@ -25,10 +27,11 @@ The project targets **DAGonStar 2.9.4** (pinned in [requirements.txt](requiremen
   - The graph updates while the workflow runs, with a progress bar and the stage of each task (staging inputs, executing, staging outputs).
   - The error message of a failed task is captured and shown.
   - A file browser covers each task's scratch directory, with previews for text, JSON, CSV, GeoJSON and NetCDF.
-- **Exports.** You can download a workflow as:
-  - DAGonStar JSON.
-  - A standalone Python program that runs with DAGonStar alone, supports `--resume`, and exits non-zero on failure.
-  - CWL v1.2, using DAGonStar's `saveAsCWL`.
+- **Exports and imports** ([docs](docs/import_export.md)):
+  - A ready-to-use **headless application ZIP**: a commented DAGonStar program, the JSON document, CWL, a sanitised `dagon.ini`, `requirements.txt` and `run.sh`.
+  - A standalone Python program that runs with DAGonStar alone, supports `--resume`, `--input` and `--form`, and exits non-zero on failure.
+  - DAGonWeb JSON, portable DAGonStar JSON, and CWL v1.2 (DAGonStar's `saveAsCWL`).
+  - **Import** a JSON document, a DAGonStar Python program, or a ZIP application. Python is read by static analysis and never executed. The round trip is lossless: exporting an imported program gives back working, commented Python with its comments and layout.
 - **Runtime options** per workflow: `max_threads`, `pre_stage` (stage inputs ahead of scheduling), `portable_emulation`, an optional FAIR provenance profile, and a guided `dagon.ini` editor.
 - **Template gallery.** There is one runnable template per task type. They are also exported as [examples/](examples).
 - **Interface.**
@@ -38,11 +41,12 @@ The project targets **DAGonStar 2.9.4** (pinned in [requirements.txt](requiremen
   - Zoom and fit controls.
   - Layouts that work on phones.
   - Installable as a PWA, with a service worker scoped to the whole site.
-- **Accounts and permissions.**
-  - `admin` and `user` roles; users manage only their own workflows and runs.
-  - Registration with email verification.
-  - Flask-WTF CSRF protection.
-  - File access is confined to the configured scratch root.
+- **Accounts, roles and permissions.**
+  - Roles carry permissions (`workflows.create`, `workflows.run`, `workflows.publish`, `assistant.use`, `admin.access`); users manage only their own workflows and runs.
+  - Local accounts with email-verified registration and domain restrictions, plus single sign-on with Google, Microsoft Entra ID (academic and work accounts) or any OpenID Connect provider.
+  - Flask-WTF CSRF protection; file access is confined to the configured scratch root.
+- **Administration panel** ([docs](docs/administration.md)): run statistics, audit log with CSV export, appearance (site name, tagline, logo, colors, default theme), authentication, execution back-end, scratch and retention, SMTP, and the LLM connector. Every setting can also be pinned with a `DAGONWEB_<KEY>` environment variable.
+- **Scalable execution.** Runs execute in a bounded pool of threads, or, for many concurrent runs, on a **Redis queue** served by any number of workers ([docs](docs/deployment.md#redis-queue-for-many-concurrent-runs)).
 
 ## Screenshots
 
@@ -65,11 +69,15 @@ flowchart LR
         SW["service-worker.js"]
     end
     subgraph Flask["DAGonWeb (Flask)"]
-        AUTH["auth / admin<br/>blueprints"]
+        AUTH["auth (local + SSO) / admin<br/>blueprints"]
+        AG["agents<br/>LLM assistant + tools"]
         WF["workflows blueprint<br/>graph API, runs, exports"]
         SPEC["task_specs.py<br/>task-type registry"]
+        DISP["executor/dispatch.py<br/>threads or Redis queue"]
         EXE["executor/local.py<br/>build_runtime_workflow()<br/>execute_workflow()"]
     end
+    RQ[("Redis (optional)<br/>RQ workers")]
+    LLM["OpenAI-compatible<br/>LLM endpoint"]
     DB[("SQLAlchemy DB<br/>SQLite / PostgreSQL / MySQL")]
     DS["DAGonStar runtime<br/>Workflow.launch() / wait()"]
     SCR[("Scratch root<br/>run_N/task dirs + checkpoint")]
@@ -80,7 +88,13 @@ flowchart LR
     WF --> SPEC
     ED -. "palette + forms" .- SPEC
     WF --> DB
-    WF -- "background thread" --> EXE
+    WF --> DISP
+    DISP -- "thread" --> EXE
+    DISP -. "enqueue" .-> RQ
+    RQ -. "worker" .-> EXE
+    ED -- "chat, dry run" --> AG
+    AG --> SPEC
+    AG -.-> LLM
     EXE --> SPEC
     EXE --> DS
     EXE -- "event listeners → TaskRun rows" --> DB
@@ -101,7 +115,7 @@ sequenceDiagram
     U->>W: POST /workflows/<id>/run
     W->>W: create WorkflowRun (pending)
     W-->>U: redirect to run page
-    W->>T: start_run_thread()
+    W->>T: submit_run() (thread or Redis worker)
     T->>T: build_runtime_workflow()<br/>(DagonTask per task, explicit edges, make_dependencies)
     T->>D: launch(resume_checkpoint_file?)
     loop each task
@@ -148,6 +162,8 @@ On import, `prevs` and `nexts` are ignored. Edges come from `workflow:///` refer
 erDiagram
     User ||--o{ Workflow : owns
     User }o--o{ Role : has
+    User ||--o{ AuditLog : "acts in"
+    Role { string name json permissions }
     Workflow ||--o{ WorkflowTask : contains
     Workflow ||--o{ WorkflowLink : "data / explicit"
     Workflow ||--o{ WorkflowRun : runs
@@ -173,6 +189,8 @@ erDiagram
 | Python & AI | Native | Python callable with staged inputs. Its requirements are installed into a per-run virtual environment. |
 | | LLM | OpenAI-compatible chat completion that uses `[llm.<name>]` profiles from `dagon.ini`. |
 | | Agentic | Bounded agent contract with requirements and coverage checks. It uses `[agent.*]` and `[agent_provider.*]` profiles. |
+| DAGonWeb interactive | Upload, Form | Pause the run until a user uploads files or fills a form on the run page (headless: `--input` / `--form`). |
+| | Table, Chart, Download | Turn CSV/JSON results into a table, a Chart.js chart (plus SVG), or download buttons. |
 
 ## Quick start with Docker
 
@@ -181,21 +199,28 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Open http://localhost:8000 and sign in with the credentials from `.env`. The demo defaults are `admin@example.org` / `admin12345`; change them before exposing the service.
+Open http://localhost:8000 and sign in with the admin credentials from `.env` (without a `.env`, the demo defaults are `admin@example.org` / `admin12345`; change them before exposing the service).
 
 The compose file mounts:
 
 - `./instance` to `/app/instance`, for SQLite and `dagon.ini`.
 - `./scratch` to `/scratch/dagonweb`, for run directories.
 
-PostgreSQL and MySQL variants are in [docker-compose.postgres.yml](docker-compose.postgres.yml) and [docker-compose.mysql.yml](docker-compose.mysql.yml).
+PostgreSQL and MySQL variants are in [docker-compose.postgres.yml](docker-compose.postgres.yml) and [docker-compose.mysql.yml](docker-compose.mysql.yml). For many concurrent runs, add the Redis overlay and scale the workers:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+               -f docker-compose.redis.yml up --build --scale worker=4
+```
+
+See [docs/deployment.md](docs/deployment.md) for every combination. A prebuilt image is published to `ghcr.io/dagonstar/dagonweb`.
 
 ## Local development
 
 ```bash
 python -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # runtime + pytest + fakeredis
 flask --app wsgi db upgrade
 flask --app wsgi seed
 flask --app wsgi run --debug
@@ -207,25 +232,35 @@ Useful commands:
 pytest                                   # full test suite, including end-to-end runs of every template
 flask --app wsgi export-examples         # regenerate examples/*.json from the built-in templates
 flask --app wsgi db migrate -m "change"  # create a migration after changing app/models.py
+flask --app wsgi worker                  # Redis run worker (execution backend "redis")
+flask --app wsgi cleanup-runs            # delete finished runs past the retention period
 ```
 
 ## Examples
 
-[examples/](examples) contains one DAGonStar JSON document per built-in template. You can import any of them from **Workflows → Import JSON**, or load them with DAGonStar directly. Templates for remote back-ends turn on `portable_emulation` in `dagonweb.runtime`, so they run locally until you configure the real service. The Agentic example also needs the `[agent.*]` / `[agent_provider.*]` profiles that the Agentic template writes into the workflow's `dagon.ini`.
+[examples/](examples) contains one DAGonStar JSON document per built-in template. You can import any of them from **Workflows → Import**, or load them with DAGonStar directly. Templates for remote back-ends turn on `portable_emulation` in `dagonweb.runtime`, so they run locally until you configure the real service. The Agentic example also needs the `[agent.*]` / `[agent_provider.*]` profiles that the Agentic template writes into the workflow's `dagon.ini`.
 
 ## Documentation
 
 - [Getting started](docs/getting_started.md)
 - [User manual](docs/user_manual.md)
 - [Workflow editor](docs/workflow_editor.md)
+- [Interactive tasks](docs/interactive_tasks.md)
+- [Workflow assistant](docs/assistant.md)
+- [Import and export](docs/import_export.md)
 - [Execution model](docs/execution_model.md)
 - [Workflow API](docs/api.md)
+- [Administration](docs/administration.md)
 - [Installation](docs/installation.md)
 - [Configuration](docs/configuration.md)
 - [Architecture](docs/architecture.md)
 - [Security](docs/security.md)
 - [Deployment](docs/deployment.md)
 - [Database examples](docs/database.md)
+
+## Continuous integration
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) runs on every push and pull request: the test suite on Python 3.12 and 3.13 (including end-to-end runs of every template, the Python round trip and the examples freshness check), JavaScript syntax checks, migrations on SQLite and PostgreSQL with `db check`, Compose validation, and a Docker build with a smoke test. [.github/workflows/docker-publish.yml](.github/workflows/docker-publish.yml) publishes multi-architecture images to GHCR from `main` and `v*` tags.
 
 ## License
 

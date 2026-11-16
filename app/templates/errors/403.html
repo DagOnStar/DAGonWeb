@@ -1,1 +1,6 @@
-{% extends 'base.html' %}{% block content %}<h1>Forbidden</h1>{% endblock %}
+{% extends 'base.html' %}{% block title %}Forbidden - {{ branding.site_name }}{% endblock %}{% block content %}
+<div class="row justify-content-center"><div class="col-md-6 text-center py-5">
+<h1 class="h3">Access denied</h1>
+<p class="text-body-secondary">Your role does not allow this action. Ask an administrator if you need access.</p>
+<a class="btn btn-primary" href="{{ url_for('index') }}">Back to workflows</a>
+</div></div>{% endblock %}

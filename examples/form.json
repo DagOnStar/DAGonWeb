@@ -1,0 +1,65 @@
+{
+  "host": "localhost",
+  "id": null,
+  "name": "form_example",
+  "tasks": {
+    "fill_form": {
+      "command": "{\nset -e\ninput_dir=\"${DAGONWEB_DATA}/fill_form\"\nwaited=0\nwhile [ ! -f \"$input_dir/.ready\" ]; do\n  if [ \"$waited\" -ge 3600 ]; then echo \"Timed out waiting for user input for fill_form\" >&2; exit 1; fi\n  sleep 2; waited=$((waited + 2))\ndone\nmkdir -p outputs\ncp \"$input_dir/form.json\" outputs/form.json\ncp \"$input_dir/form.env\" outputs/form.env\ncat outputs/form.json\n}",
+      "dagonweb": {
+        "config": {
+          "description": "Choose the run parameters.",
+          "fields": [
+            {
+              "default": 0.5,
+              "label": "Threshold",
+              "name": "threshold",
+              "required": true,
+              "type": "number"
+            },
+            {
+              "default": "experiment",
+              "label": "Label",
+              "name": "label",
+              "type": "text"
+            }
+          ],
+          "timeout_minutes": 60
+        },
+        "task_type": "form",
+        "x": 120,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "fill_form",
+      "nexts": [
+        "use_values"
+      ],
+      "prevs": [],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "use_values": {
+      "command": "values=workflow:///fill_form/outputs/form.env ;\n. $values\necho \"Threshold $THRESHOLD for $LABEL\" > summary.txt",
+      "dagonweb": {
+        "config": {
+          "command": ". $values\necho \"Threshold $THRESHOLD for $LABEL\" > summary.txt",
+          "inputs": {
+            "values": "workflow:///fill_form/outputs/form.env"
+          }
+        },
+        "x": 420,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "use_values",
+      "nexts": [],
+      "prevs": [
+        "fill_form"
+      ],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    }
+  }
+}

@@ -2,7 +2,8 @@
 (() => {
   const KEY = 'dagonweb.theme';
   const media = window.matchMedia('(prefers-color-scheme: dark)');
-  const stored = () => { try { return localStorage.getItem(KEY) || 'auto'; } catch { return 'auto'; } };
+  const fallback = () => document.documentElement.dataset.defaultTheme || 'auto';
+  const stored = () => { try { return localStorage.getItem(KEY) || fallback(); } catch { return fallback(); } };
   const apply = choice => {
     const theme = choice === 'auto' ? (media.matches ? 'dark' : 'light') : choice;
     document.documentElement.setAttribute('data-bs-theme', theme);

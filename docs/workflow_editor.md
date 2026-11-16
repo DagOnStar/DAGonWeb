@@ -32,6 +32,14 @@ To remove a link, click it. Links are always derived from the saved configuratio
 - `explicit_prevs` draws explicit links.
 - References to other workflows stay in the configuration but draw nothing.
 
+## Export menu
+
+**Export** downloads the workflow as a headless application ZIP, a Python program, DAGonWeb JSON, portable DAGonStar JSON, or CWL. See [Import and export](import_export.md).
+
+## Assistant
+
+**✨ Assistant** opens the [workflow assistant](assistant.md). Its draft replaces the canvas only when you press **Apply to canvas**; the change is saved like any other edit.
+
 ## Saving
 
 Every change is saved automatically after a short pause, and the header shows *Saving…*, *All changes saved*, or the error. Leaving the page with unsaved changes asks for confirmation. **Run** saves first and then starts the run. **Organize** arranges the tasks in dependency layers, and **Fit** zooms to show the whole workflow.

@@ -1,7 +1,7 @@
 /* DAGonWeb styles: Bootstrap 5.3 plus a small set of workflow-specific tokens.
    Colors are CSS variables so the light and dark themes stay consistent. */
 :root {
-  --dw-brand: #2457d6;
+  --dw-brand: var(--dw-brand-custom, #2457d6);
   --dw-brand-ink: #ffffff;
   --dw-nav: #0f1b33;
   --dw-canvas: #f6f8fb;
@@ -21,7 +21,7 @@
   --dw-pending: #8a94a6;
 }
 [data-bs-theme="dark"] {
-  --dw-brand: #6d93ff;
+  --dw-brand: color-mix(in srgb, var(--dw-brand-custom, #2457d6) 60%, #ffffff);
   --dw-nav: #0a1224;
   --dw-canvas: #121a29;
   --dw-grid: #26324a;
@@ -178,3 +178,52 @@ body { background: var(--bs-tertiary-bg); }
   #palette { max-height: 260px; }
 }
 @media (max-width: 767.98px) { .dagon-ini-toolbar { position: static; } }
+
+/* Branding: the administrator's brand color drives Bootstrap's primary. */
+.btn-primary { --bs-btn-bg: var(--dw-brand); --bs-btn-border-color: var(--dw-brand); --bs-btn-hover-bg: color-mix(in srgb, var(--dw-brand) 85%, #000); --bs-btn-hover-border-color: color-mix(in srgb, var(--dw-brand) 85%, #000); --bs-btn-active-bg: color-mix(in srgb, var(--dw-brand) 75%, #000); --bs-btn-disabled-bg: var(--dw-brand); --bs-btn-disabled-border-color: var(--dw-brand); }
+[data-bs-theme="dark"] .btn-primary { --bs-btn-color: #0a1224; --bs-btn-hover-color: #0a1224; --bs-btn-active-color: #0a1224; }
+.btn-outline-primary { --bs-btn-color: var(--dw-brand); --bs-btn-border-color: var(--dw-brand); --bs-btn-hover-bg: var(--dw-brand); --bs-btn-hover-border-color: var(--dw-brand); --bs-btn-active-bg: var(--dw-brand); }
+a { color: var(--dw-brand); }
+.list-group-item.active { background: var(--dw-brand); border-color: var(--dw-brand); }
+.dw-navbar .navbar-brand span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60vw; }
+.dw-logo { object-fit: contain; }
+
+/* Sign-in */
+.auth-card { box-shadow: var(--dw-shadow); }
+.auth-logo { object-fit: contain; }
+.sso-button { display: flex; align-items: center; justify-content: center; gap: .5rem; }
+.sso-mark { display: inline-flex; width: 1.4rem; height: 1.4rem; align-items: center; justify-content: center; border-radius: .3rem; font-weight: 700; background: var(--bs-tertiary-bg); }
+.divider-text { display: flex; align-items: center; gap: .5rem; }
+.divider-text::before, .divider-text::after { content: ""; flex: 1; border-top: 1px solid var(--bs-border-color); }
+
+/* Administration */
+.admin-nav .list-group-item { border-left: 0; border-right: 0; }
+.admin-main { min-width: 0; }
+.stat-card .stat-value { font-size: 1.6rem; font-weight: 700; line-height: 1.1; overflow-wrap: anywhere; }
+.legend-swatch { display: inline-block; width: .7rem; height: .7rem; border-radius: .15rem; vertical-align: middle; }
+.run-chart { display: flex; align-items: stretch; gap: .35rem; height: 180px; }
+.run-chart-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.run-chart-bar { flex: 1; display: flex; flex-direction: column-reverse; background: var(--bs-tertiary-bg); border-radius: .25rem; overflow: hidden; }
+.run-chart-label { font-size: .7rem; text-align: center; color: var(--bs-secondary-color); }
+.checkbox-list ul { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: .25rem .75rem; }
+.checkbox-list li { display: flex; gap: .4rem; align-items: baseline; }
+.checkbox-list input { flex: 0 0 auto; }
+
+/* Assistant panel */
+.assistant-log { display: flex; flex-direction: column; gap: .5rem; overflow-y: auto; }
+.assistant-msg { padding: .5rem .7rem; border-radius: .6rem; max-width: 92%; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .9rem; }
+.assistant-msg.user { align-self: flex-end; background: color-mix(in srgb, var(--dw-brand) 16%, transparent); }
+.assistant-msg.assistant { align-self: flex-start; background: var(--bs-tertiary-bg); border: 1px solid var(--bs-border-color); }
+.assistant-msg.error { align-self: stretch; background: var(--bs-danger-bg-subtle); color: var(--bs-danger-text-emphasis); }
+.assistant-trace { font-size: .75rem; color: var(--bs-secondary-color); margin-top: .25rem; }
+.assistant-draft { border: 1px dashed var(--dw-brand); border-radius: .5rem; padding: .5rem; font-size: .8rem; }
+.assistant-chips .btn { font-size: .75rem; }
+#assistantPanel { --bs-offcanvas-width: min(440px, 100vw); }
+
+/* Interactive run tasks */
+.interaction-card { border-left: 4px solid var(--dw-cat-interactive); }
+.result-table { max-height: 24rem; overflow: auto; }
+.result-chart { position: relative; height: 320px; }
+:root { --dw-cat-interactive: #b4277d; }
+[data-bs-theme="dark"] { --dw-cat-interactive: #f06cb8; }
+.cat-interactive { --cat: var(--dw-cat-interactive); }

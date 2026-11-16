@@ -1,12 +1,12 @@
-{% extends 'base.html' %}
+{% extends 'admin/_layout.html' %}
 {% block title %}Edit dagon.ini · DAGonWeb{% endblock %}
-{% block content %}
+{% block admin_content %}
 <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
   <div>
     <h1 class="h3 mb-1">Edit global dagon.ini</h1>
     <p class="text-muted mb-0">Advanced defaults for future DAGonStar workflow runs.</p>
   </div>
-  <a class="btn btn-outline-secondary" href="{{ url_for('admin.settings') }}">Back to setup</a>
+  <a class="btn btn-outline-secondary" href="{{ url_for('admin.dashboard') }}">Back to overview</a>
 </div>
 
 <div class="row g-3">
@@ -18,7 +18,7 @@
           {{ form.content.label(class='form-label mb-0 fw-semibold') }}
           <div id="dagon-ini-help" class="form-text mb-0">Use the guided setup or raw INI. Both views save the same DAGonStar file.</div>
         </div>
-        <div class="d-flex align-items-center gap-2">
+        <div class="d-flex flex-wrap align-items-center gap-2">
           <button type="button" class="btn btn-outline-secondary btn-sm" id="dagonIniFormat">Format</button>
           <button type="button" class="btn btn-outline-secondary btn-sm" id="dagonIniAddLlm">Add LLM</button>
           <span class="badge text-bg-light border"><span id="dagonIniLines">0</span> lines</span>

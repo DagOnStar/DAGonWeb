@@ -8,6 +8,10 @@ DAGonWeb is a Flask/Bootstrap Progressive Web Application for creating, editing,
 - Use DAGonStar as the execution runtime. The supported version is pinned in `requirements.txt`, currently 2.9.4 with the `docker` and `kubernetes` extras.
 - Build data dependencies from `workflow:///<task>/<path>` references and explicit dependencies from `explicit_prevs`. Never use imported `prevs` or `nexts` fields, except as the DAGonStar fallback: a document without `explicit_prevs` treats its legacy `prevs` as explicit edges. `WorkflowLink.kind` is either `data` or `explicit`.
 - `app/task_specs.py` is the single registry of task types. It defines the palette and Inspector fields, the default configs, the DAGonStar document fields, and the `DagonTask` arguments. To add a DAGonStar option, change the registry rather than the templates or the JavaScript.
+- DAGonWeb interactive task types (Upload, Form, Table, Chart, Download) are registered in `app/task_specs.py` with `dagon_type="batch"`; their scripts live in `app/interactive.py`. In the document their `type` is `batch` and the DAGonWeb kind is `dagonweb.task_type`.
+- Python export and import live in `app/pycode.py`. Import uses `ast` only and must never execute uploaded code. Exporting an imported workflow must give back working, commented Python (round-trip tests in `tests/test_platform.py`).
+- Administration settings are declared in `app/settings.py` (one `SettingDef` per key, overridable with `DAGONWEB_<KEY>`). Permissions are declared in `PERMISSIONS` in `app/models.py`; protect routes with `app/authz.py`.
+- Runs are dispatched by `app/executor/dispatch.py` (thread pool or Redis/RQ). The LLM assistant (`app/agents/`) edits drafts only; the user applies them.
 - Preserve the DAGonStar task-map JSON document (`tasks` keyed by task name). DAGonWeb metadata may live only in the additive `dagonweb` extension.
 - Use SQLAlchemy models and migrations for persistent state.
 - Use role-based access: `admin` can manage users, roles, workflows, and settings; `user` can manage own workflows and runs.
@@ -32,7 +36,7 @@ DAGonWeb is a Flask/Bootstrap Progressive Web Application for creating, editing,
 ```bash
 python -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 flask --app wsgi db upgrade
 flask --app wsgi seed
 flask --app wsgi run

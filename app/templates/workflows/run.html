@@ -31,7 +31,11 @@
   </div>
 </div>
 
+<div id="runInteractions" aria-live="polite" hidden></div>
+
 <div id="runLayout" class="row g-3 run-layout"
+     data-csrf="{{ csrf_token() }}"
+     data-interact-url="{{ url_for('workflows.submit_interaction', run_id=run.id, task_name='__task__') }}"
      data-status-url="{{ url_for('workflows.run_status', workflow_id=workflow.id, run_id=run.id) }}"
      data-files-url="{{ url_for('workflows.browse_task_run_files', task_run_id=0) }}"
      data-file-url="{{ url_for('workflows.preview_task_run_file', task_run_id=0) }}"
@@ -48,6 +52,11 @@
     </div>
   </div>
 </div>
+
+<section class="card mt-3" id="runResults" aria-labelledby="runResultsHeading" hidden>
+  <div class="card-header" id="runResultsHeading">Results</div>
+  <div class="card-body"></div>
+</section>
 
 <section class="card mt-3" aria-labelledby="runLogHeading">
   <div class="card-header d-flex justify-content-between align-items-center">
@@ -99,4 +108,7 @@
 <script type="application/json" id="runGraph">{{ workflow.as_json()|tojson }}</script>
 <script type="application/json" id="runSpecs">{{ specs|tojson }}</script>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='js/run.js') }}"></script>{% endblock %}
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="{{ url_for('static', filename='js/run.js') }}"></script>
+{% endblock %}

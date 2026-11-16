@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Byte-compile
+        run: python -m compileall -q app tests migrations wsgi.py
+      - name: Check JavaScript syntax
+        run: for file in app/static/js/*.js; do node --check "$file"; done
+      - name: Migrations apply to an empty database
+        env:
+          DATABASE_URL: sqlite:////tmp/ci-dagonweb.sqlite
+          SCRATCH_DIR: /tmp/ci-scratch
+          DAGON_INI_PATH: /tmp/ci-dagon.ini
+        run: |
+          flask --app wsgi db upgrade
+          flask --app wsgi seed
+          flask --app wsgi db check
+      - name: Run tests (includes the examples freshness check)
+        run: pytest -q
+
+  postgres-migrations:
+    name: Migrations on PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dagonweb
+          POSTGRES_PASSWORD: dagonweb
+          POSTGRES_DB: dagonweb
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dagonweb" --health-interval 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Upgrade, seed and downgrade
+        env:
+          DATABASE_URL: postgresql+psycopg2://dagonweb:dagonweb@localhost:5432/dagonweb
+          SCRATCH_DIR: /tmp/ci-scratch
+          DAGON_INI_PATH: /tmp/ci-dagon.ini
+        run: |
+          flask --app wsgi db upgrade
+          flask --app wsgi seed
+          flask --app wsgi db downgrade base
+          flask --app wsgi db upgrade
+
+  compose:
+    name: Docker image and Compose files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose configurations
+        run: |
+          docker compose -f docker-compose.yml config --quiet
+          docker compose -f docker-compose.postgres.yml config --quiet
+          docker compose -f docker-compose.mysql.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.postgres.yml -f docker-compose.redis.yml config --quiet
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: dagonweb:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test the image
+        run: |
+          docker run -d --name dagonweb -p 8000:8000 -e SECRET_KEY=ci dagonweb:ci
+          for i in $(seq 1 30); do curl -fsS http://localhost:8000/login >/dev/null && break; sleep 2; done
+          curl -fsS http://localhost:8000/login | grep -q "Sign in"
+          curl -fsS http://localhost:8000/service-worker.js >/dev/null
+          docker exec dagonweb flask --app wsgi worker --help >/dev/null
+          docker logs dagonweb | tail -20

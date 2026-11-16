@@ -1,3 +1,7 @@
+# DAGonWeb with PostgreSQL. Standalone or as an overlay:
+#   docker compose -f docker-compose.postgres.yml up --build
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml -f docker-compose.redis.yml up --build
+# With the Redis overlay, put the same DATABASE_URL in .env so workers use it too.
 services:
   db:
     image: postgres:16
@@ -9,9 +13,12 @@ services:
       - postgres-data:/var/lib/postgresql/data
   dagonweb:
     build: .
+    env_file:
+      - path: .env
+        required: false
     environment:
-      SECRET_KEY: change-me
-      DATABASE_URL: postgresql+psycopg2://dagonweb:dagonweb@db:5432/dagonweb
+      SECRET_KEY: ${SECRET_KEY:-change-me}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://dagonweb:dagonweb@db:5432/dagonweb}
       SCRATCH_DIR: /scratch/dagonweb
       ADMIN_EMAIL: admin@example.org
       ADMIN_PASSWORD: admin12345

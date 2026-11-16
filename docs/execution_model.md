@@ -3,7 +3,7 @@
 DAGonWeb runs workflows with the DAGonStar runtime (2.9.4, pinned in `requirements.txt`). When you press **Run**, the server takes these steps:
 
 1. **Create a run.** DAGonWeb adds a `WorkflowRun` row (`pending`) and a run directory `run_<id>/` below the configured scratch root, then redirects the browser to the live run page.
-2. **Start a worker thread.** The thread loads the workflow's `dagon.ini`:
+2. **Dispatch the run.** With the default `thread` backend, a thread of the web process runs it, at most **Concurrent runs per process** at a time (others wait for a slot). With the `redis` backend, the run is queued on Redis and an RQ worker (`flask --app wsgi worker`) executes it; if Redis is unreachable, DAGonWeb falls back to a local thread. The run loads the workflow's `dagon.ini`:
    - The global `dagon.ini` is merged with the per-workflow settings.
    - `[batch] scratch_dir_base` is always forced to the run directory, and `remove_dir` to `False`. A per-workflow ini therefore cannot write outside the scratch root.
 3. **Build the runtime workflow.** `build_runtime_workflow()` creates a `dagon.Workflow` with:
@@ -20,7 +20,9 @@ DAGonWeb runs workflows with the DAGonStar runtime (2.9.4, pinned in `requiremen
    - Each event is timestamped, so the run page can show *staging inputs → executing → staging outputs*.
 7. **Report failures.** DAGonStar task threads log their exceptions instead of raising them. DAGonWeb attaches a logging handler, filtered by task thread, that captures the error message and stores it in the failed task's log. Tasks that never start because an upstream task failed are marked as skipped.
 
-Browser navigation never stops a run. Restarting the application process does stop runs that are in progress; a durable worker queue is needed to recover them.
+Browser navigation never stops a run. With the thread backend, restarting the application process stops runs that are in progress; with the Redis backend, runs live in the workers and survive web restarts (see [deployment.md](deployment.md)).
+
+[Interactive tasks](interactive_tasks.md) (Upload, Form) wait inside the run for input submitted on the run page; Table, Chart and Download tasks publish their results there.
 
 ## Resume
 

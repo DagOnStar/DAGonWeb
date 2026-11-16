@@ -9,7 +9,7 @@ from typing import Any
 from werkzeug.security import check_password_hash, generate_password_hash
 from flask_login import UserMixin
 from .extensions import db
-from .task_specs import TASK_TYPE_LABELS, document_fields
+from .task_specs import TASK_TYPE_LABELS, document_fields, runtime_type
 
 user_roles = db.Table(
     "user_roles",
@@ -34,6 +34,12 @@ class TaskType(str, Enum):
     FAAS = "faas"
     IOT = "iot"
     AGENTIC = "agentic"
+    # DAGonWeb interactive types; DAGonStar executes them as BATCH tasks.
+    UPLOAD = "upload"
+    FORM = "form"
+    TABLE = "table"
+    CHART = "chart"
+    DOWNLOAD = "download"
 
 
 LEGACY_TASK_TYPES = {"bash": TaskType.BATCH.value, "python": TaskType.BATCH.value}
@@ -53,11 +59,35 @@ class TimestampMixin:
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
+# Fine-grained permissions granted through roles. ``admin`` implies all.
+PERMISSIONS: dict[str, str] = {
+    "workflows.create": "Create, import and edit own workflows",
+    "workflows.run": "Run workflows and manage own runs",
+    "workflows.publish": "Make own workflows public",
+    "assistant.use": "Use the LLM workflow assistant",
+    "admin.access": "Open the administration panel",
+}
+DEFAULT_USER_PERMISSIONS = ["workflows.create", "workflows.run", "workflows.publish", "assistant.use"]
+
+
 class Role(TimestampMixin, db.Model):
     __tablename__ = "roles"
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(80), unique=True, nullable=False)
     description = db.Column(db.String(255), default="")
+    permissions_json = db.Column(db.Text, default="[]", nullable=False, server_default="[]")
+
+    @property
+    def permissions(self) -> list[str]:
+        try:
+            value = json.loads(self.permissions_json or "[]")
+        except json.JSONDecodeError:
+            return []
+        return [item for item in value if item in PERMISSIONS] if isinstance(value, list) else []
+
+    @permissions.setter
+    def permissions(self, value: list[str]) -> None:
+        self.permissions_json = json.dumps(sorted({item for item in value if item in PERMISSIONS}))
 
 class User(UserMixin, TimestampMixin, db.Model):
     __tablename__ = "users"
@@ -66,16 +96,33 @@ class User(UserMixin, TimestampMixin, db.Model):
     name = db.Column(db.String(255), nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
     active = db.Column(db.Boolean, default=True, nullable=False)
+    # ``local`` accounts sign in with a password; SSO accounts store the
+    # provider key and the provider's stable subject identifier.
+    auth_provider = db.Column(db.String(40), default="local", nullable=False, server_default="local")
+    external_id = db.Column(db.String(255), index=True)
+    last_login_at = db.Column(db.DateTime)
     roles = db.relationship("Role", secondary=user_roles, lazy="joined", backref=db.backref("users", lazy="dynamic"))
 
     def set_password(self, password: str) -> None:
         self.password_hash = generate_password_hash(password)
+
+    def set_unusable_password(self) -> None:
+        """SSO accounts get a random password nobody knows."""
+        self.password_hash = generate_password_hash(secrets.token_urlsafe(48))
 
     def check_password(self, password: str) -> bool:
         return check_password_hash(self.password_hash, password)
 
     def has_role(self, role_name: str) -> bool:
         return any(role.name == role_name for role in self.roles)
+
+    @property
+    def is_admin(self) -> bool:
+        return self.has_role("admin")
+
+    def can(self, permission: str) -> bool:
+        """Return whether any of the user's roles grants ``permission``."""
+        return self.is_admin or any(permission in role.permissions for role in self.roles)
 
     @property
     def is_active(self) -> bool:  # type: ignore[override]
@@ -99,6 +146,20 @@ class RegistrationToken(TimestampMixin, db.Model):
         token = secrets.token_urlsafe(32)
         record = cls(email=email.lower(), token_hash=cls.hash_token(token), expires_at=expires_at)
         return record, token
+
+class AuditLog(db.Model):
+    """Append-only record of security- and operations-relevant events."""
+
+    __tablename__ = "audit_logs"
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    action = db.Column(db.String(80), nullable=False, index=True)
+    target = db.Column(db.String(255), default="", nullable=False)
+    detail = db.Column(db.Text, default="", nullable=False)
+    ip_address = db.Column(db.String(64), default="", nullable=False)
+    user = db.relationship("User")
+
 
 class Setting(TimestampMixin, db.Model):
     __tablename__ = "settings"
@@ -179,10 +240,13 @@ class Workflow(TimestampMixin, db.Model):
                 "prevs": [],
                 "explicit_prevs": [],
                 "command": "",
-                "type": task.normalized_task_type,
+                "type": runtime_type(task.normalized_task_type),
             }
-            entry.update(document_fields(task.normalized_task_type, config))
+            entry.update(document_fields(task.normalized_task_type, config, task.name))
             entry["dagonweb"] = {"x": task.x, "y": task.y, "config": config}
+            if entry["type"] != task.normalized_task_type:
+                # DAGonWeb interactive kinds run as DAGonStar Batch tasks.
+                entry["dagonweb"]["task_type"] = task.normalized_task_type
             tasks[task.name] = entry
         for link in self.links:
             if link.source_uid in tasks and link.target_uid in tasks:

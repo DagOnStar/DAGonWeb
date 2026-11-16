@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+{% block title %}Administration - {{ branding.site_name }}{% endblock %}
+{% block content %}
+{% set endpoint = request.endpoint or '' %}
+{% set current_section = request.view_args.get('section') if request.view_args else None %}
+<div class="row g-3 admin-shell">
+  <nav class="col-lg-3 col-xl-2" aria-label="Administration">
+    <div class="list-group admin-nav small">
+      <a class="list-group-item list-group-item-action {% if endpoint == 'admin.dashboard' %}active{% endif %}" href="{{ url_for('admin.dashboard') }}">📊 Overview &amp; statistics</a>
+      <a class="list-group-item list-group-item-action {% if endpoint.startswith('admin.user') %}active{% endif %}" href="{{ url_for('admin.users') }}">👤 Users</a>
+      <a class="list-group-item list-group-item-action {% if endpoint.startswith('admin.role') %}active{% endif %}" href="{{ url_for('admin.roles') }}">🛡 Roles &amp; permissions</a>
+      {% for key, label, _ in admin_sections %}
+        <a class="list-group-item list-group-item-action {% if current_section == key %}active{% endif %}" href="{{ url_for('admin.settings_section', section=key) }}">{{ {'appearance': '🎨', 'authentication': '🔐', 'execution': '⚙', 'storage': '💾', 'smtp': '✉', 'llm': '✨'}[key] }} {{ label }}</a>
+      {% endfor %}
+      <a class="list-group-item list-group-item-action {% if endpoint == 'admin.dagon_ini' %}active{% endif %}" href="{{ url_for('admin.dagon_ini') }}">🧩 DAGonStar dagon.ini</a>
+      <a class="list-group-item list-group-item-action {% if endpoint == 'admin.logs' %}active{% endif %}" href="{{ url_for('admin.logs') }}">📜 Audit log</a>
+    </div>
+  </nav>
+  <div class="col-lg-9 col-xl-10 admin-main">{% block admin_content %}{% endblock %}</div>
+</div>
+{% endblock %}

@@ -1,3 +1,67 @@
-{% extends 'base.html' %}{% block content %}<h1>Admin</h1><div class="row g-3">
-{% for label,value in [('Users',users),('Roles',roles),('Workflows',workflows)] %}<div class="col-md-4"><div class="card"><div class="card-body"><div class="display-6">{{ value }}</div><div>{{ label }}</div></div></div></div>{% endfor %}</div>
-<div class="mt-3"><a class="btn btn-outline-primary" href="{{ url_for('admin.users') }}">Users</a> <a class="btn btn-outline-primary" href="{{ url_for('admin.roles') }}">Roles</a> <a class="btn btn-outline-primary" href="{{ url_for('admin.settings') }}">Setup</a></div>{% endblock %}
+{% extends 'admin/_layout.html' %}
+{% block admin_content %}
+<div class="page-header"><div><h1 class="h3">Overview &amp; statistics</h1><p class="page-subtitle">Usage of {{ branding.site_name }} and the health of its execution back-ends.</p></div></div>
+<div class="row row-cols-2 row-cols-md-3 row-cols-xl-6 g-2 mb-3">
+  {% for label, value, hint in [('Users', counts.users, counts.active_users ~ ' active in 30 days'), ('Roles', counts.roles, ''), ('Workflows', counts.workflows, ''), ('Runs', counts.runs, stats.active ~ ' active now'), ('Success rate', (stats.success_rate ~ '%') if stats.success_rate is not none else '—', 'finished runs'), ('Dispatcher', status.backend, ('Redis ' ~ ('ok' if status.redis.ok else 'unreachable')) if status.redis else 'in-process threads')] %}
+  <div class="col"><div class="card stat-card h-100"><div class="card-body p-3"><div class="stat-value">{{ value }}</div><div class="small fw-semibold">{{ label }}</div>{% if hint %}<div class="small text-body-secondary">{{ hint }}</div>{% endif %}</div></div></div>
+  {% endfor %}
+</div>
+<div class="row g-3">
+  <div class="col-xl-8">
+    <section class="card h-100" aria-labelledby="runsChartTitle">
+      <div class="card-header d-flex justify-content-between align-items-center"><span id="runsChartTitle">Runs in the last 14 days</span>
+        <span class="small"><span class="legend-swatch bg-success"></span> success <span class="legend-swatch bg-danger ms-2"></span> failed <span class="legend-swatch bg-secondary ms-2"></span> other</span></div>
+      <div class="card-body">
+        <div class="run-chart" role="img" aria-label="Runs per day for the last 14 days">
+          {% for day in stats.per_day %}
+          <div class="run-chart-col" title="{{ day.day }}: {{ day.total }} run(s)">
+            <div class="run-chart-bar">
+              {% if day.other %}<div class="bg-secondary" style="height: {{ (100 * day.other / stats.peak)|round(1) }}%"></div>{% endif %}
+              {% if day.failed %}<div class="bg-danger" style="height: {{ (100 * day.failed / stats.peak)|round(1) }}%"></div>{% endif %}
+              {% if day.success %}<div class="bg-success" style="height: {{ (100 * day.success / stats.peak)|round(1) }}%"></div>{% endif %}
+            </div>
+            <div class="run-chart-label">{{ day.day[8:] }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="col-xl-4">
+    <section class="card h-100"><div class="card-header">Runs by status</div>
+      <ul class="list-group list-group-flush">
+        {% for status_name, count in stats.by_status|dictsort %}<li class="list-group-item d-flex justify-content-between"><span>{{ status_name }}</span><span class="badge text-bg-secondary">{{ count }}</span></li>{% else %}<li class="list-group-item text-body-secondary">No runs yet.</li>{% endfor %}
+      </ul>
+    </section>
+  </div>
+  <div class="col-md-6 col-xl-4">
+    <section class="card h-100"><div class="card-header">Most-run workflows</div>
+      <ol class="list-group list-group-flush list-group-numbered">
+        {% for name, runs in stats.top_workflows %}<li class="list-group-item d-flex justify-content-between"><span class="text-truncate me-2">{{ name }}</span><span class="badge text-bg-primary">{{ runs }}</span></li>{% else %}<li class="list-group-item text-body-secondary">No runs yet.</li>{% endfor %}
+      </ol>
+    </section>
+  </div>
+  <div class="col-md-6 col-xl-4">
+    <section class="card h-100"><div class="card-header">Most active users</div>
+      <ol class="list-group list-group-flush list-group-numbered">
+        {% for name, runs in stats.top_users %}<li class="list-group-item d-flex justify-content-between"><span class="text-truncate me-2">{{ name }}</span><span class="badge text-bg-primary">{{ runs }}</span></li>{% else %}<li class="list-group-item text-body-secondary">No runs yet.</li>{% endfor %}
+      </ol>
+    </section>
+  </div>
+  <div class="col-xl-4">
+    <section class="card h-100"><div class="card-header">Recent failures</div>
+      <ul class="list-group list-group-flush">
+        {% for run in stats.failures %}<li class="list-group-item small"><a href="{{ url_for('workflows.run_detail', workflow_id=run.workflow_id, run_id=run.id) }}">{{ run.workflow.name }} · {{ run.label or 'run ' ~ run.id }}</a><div class="text-body-secondary">{{ run.updated_at.strftime('%Y-%m-%d %H:%M') }} · {{ run.user.name }}</div></li>{% else %}<li class="list-group-item text-body-secondary small">No failed runs.</li>{% endfor %}
+      </ul>
+    </section>
+  </div>
+  <div class="col-12">
+    <section class="card"><div class="card-header d-flex justify-content-between align-items-center"><span>Latest events</span><a class="small" href="{{ url_for('admin.logs') }}">Full audit log</a></div>
+      <div class="table-responsive"><table class="table table-sm mb-0 small align-middle">
+        <thead><tr><th scope="col">Time (UTC)</th><th scope="col">User</th><th scope="col">Action</th><th scope="col">Target</th></tr></thead>
+        <tbody>{% for entry in recent_events %}<tr><td class="text-nowrap">{{ entry.created_at.strftime('%Y-%m-%d %H:%M') }}</td><td>{{ entry.user.email if entry.user else '—' }}</td><td><code>{{ entry.action }}</code></td><td class="text-break">{{ entry.target }}</td></tr>{% else %}<tr><td colspan="4" class="text-body-secondary">No events recorded yet.</td></tr>{% endfor %}</tbody>
+      </table></div>
+    </section>
+  </div>
+</div>
+{% endblock %}

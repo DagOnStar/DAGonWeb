@@ -43,7 +43,8 @@
     const tasks = Object.values(graph.tasks || {});
     tasks.forEach(task => {
       const position = task.dagonweb || {};
-      const spec = specs[task.type] || { icon: '?', label: task.type, category: 'shell' };
+      const kind = task.dagonweb?.task_type || task.type;
+      const spec = specs[kind] || { icon: '?', label: kind, category: 'shell' };
       const state = runTasks[task.name];
       const status = state?.status || 'pending';
       const node = document.createElement('button');
@@ -248,6 +249,8 @@
       renderLog(data.log);
       runTasks = Object.fromEntries(data.tasks.map(task => [task.name, task]));
       renderSummary(data);
+      renderInteractions(data.interactions || []);
+      renderResults(data.results || []);
       draw();
       // Refresh the selected task's log and file list while it runs, unless the user is browsing.
       if (selected && runTasks[selected] && !currentPath && !document.getElementById('filePreview')?.querySelector('pre, table, svg')) {
@@ -261,6 +264,137 @@
     } catch {
       setTimeout(poll, 3000);
     }
+  }
+
+  // ------------------------------------------------------- interactive tasks
+  const interactionsBox = document.getElementById('runInteractions');
+  const resultsBox = document.getElementById('runResults');
+  let interactionKey = '';
+  let resultKey = '';
+
+  function fieldControl(field) {
+    const id = `form_${field.name}`;
+    const required = field.required ? 'required' : '';
+    const value = escapeHtml(field.default ?? '');
+    const label = `<label class="form-label small fw-semibold" for="${id}">${escapeHtml(field.label)}${field.required ? ' *' : ''}</label>`;
+    const help = field.help ? `<div class="form-text">${escapeHtml(field.help)}</div>` : '';
+    if (field.type === 'boolean') {
+      return `<div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" role="switch" id="${id}" name="${escapeHtml(field.name)}" value="true" ${field.default ? 'checked' : ''}><label class="form-check-label" for="${id}">${escapeHtml(field.label)}</label>${help}</div>`;
+    }
+    if (field.type === 'select') {
+      const options = (field.options || []).map(option => `<option ${String(option) === String(field.default) ? 'selected' : ''}>${escapeHtml(option)}</option>`).join('');
+      return `<div class="mb-2">${label}<select class="form-select form-select-sm" id="${id}" name="${escapeHtml(field.name)}" ${required}>${options}</select>${help}</div>`;
+    }
+    if (field.type === 'textarea') {
+      return `<div class="mb-2">${label}<textarea class="form-control form-control-sm" id="${id}" name="${escapeHtml(field.name)}" rows="3" ${required}>${value}</textarea>${help}</div>`;
+    }
+    const type = { number: 'number', integer: 'number', date: 'date', email: 'email' }[field.type] || 'text';
+    const step = field.type === 'number' ? 'step="any"' : field.type === 'integer' ? 'step="1"' : '';
+    return `<div class="mb-2">${label}<input class="form-control form-control-sm" type="${type}" ${step} id="${id}" name="${escapeHtml(field.name)}" value="${value}" ${required}>${help}</div>`;
+  }
+
+  function renderInteractions(items) {
+    const key = JSON.stringify(items.map(item => [item.task, item.running]));
+    if (key === interactionKey) return;
+    interactionKey = key;
+    interactionsBox.hidden = !items.length;
+    interactionsBox.innerHTML = items.map(item => `
+      <form class="card interaction-card mb-3" data-task="${escapeHtml(item.task)}" data-kind="${escapeHtml(item.kind)}" ${item.kind === 'upload' ? 'enctype="multipart/form-data"' : ''}>
+        <div class="card-header d-flex justify-content-between align-items-center"><span><strong>${escapeHtml(item.task)}</strong> needs your ${item.kind === 'upload' ? 'files' : 'input'}</span>
+          <span class="badge ${item.running ? 'text-bg-primary' : 'text-bg-secondary'}">${item.running ? 'waiting' : 'starts soon'}</span></div>
+        <div class="card-body">
+          ${item.description ? `<p class="small mb-2">${escapeHtml(item.description)}</p>` : ''}
+          ${item.kind === 'upload'
+            ? `<label class="form-label small" for="upload_${escapeHtml(item.task)}">File${item.multiple ? 's' : ''} (max ${item.max_mb} MB${item.accept ? `, ${escapeHtml(item.accept)}` : ''})</label>
+               <input class="form-control" type="file" id="upload_${escapeHtml(item.task)}" name="files" ${item.multiple ? 'multiple' : ''} accept="${escapeHtml(item.accept)}" required>
+               ${item.multiple ? '' : `<div class="form-text">Saved as <code>outputs/${escapeHtml(item.save_as)}</code>.</div>`}`
+            : (item.fields || []).map(fieldControl).join('')}
+          <div class="d-flex align-items-center gap-2 mt-2"><button class="btn btn-primary btn-sm">${item.kind === 'upload' ? 'Upload and continue' : 'Submit and continue'}</button><span class="small text-danger" role="alert" data-error></span></div>
+        </div>
+      </form>`).join('');
+    interactionsBox.querySelectorAll('form').forEach(form => form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const error = form.querySelector('[data-error]');
+      const button = form.querySelector('button');
+      error.textContent = '';
+      button.disabled = true;
+      const body = new FormData(form);
+      if (form.dataset.kind === 'form') form.querySelectorAll('input[type=checkbox]').forEach(box => { if (!box.checked) body.set(box.name, 'false'); });
+      try {
+        const response = await fetch(layout.dataset.interactUrl.replace('__task__', encodeURIComponent(form.dataset.task)), { method: 'POST', body, headers: { 'X-CSRFToken': layout.dataset.csrf, Accept: 'application/json' } });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        form.remove();
+        interactionKey = '';
+        if (!interactionsBox.querySelector('form')) interactionsBox.hidden = true;
+      } catch (exception) {
+        error.textContent = exception.message;
+        button.disabled = false;
+      }
+    }));
+  }
+
+  function chartColors(count) {
+    const styles = getComputedStyle(document.documentElement);
+    const base = ['--dw-cat-shell', '--dw-cat-python_ai', '--dw-cat-containers', '--dw-cat-services', '--dw-cat-interactive', '--dw-link-explicit'].map(name => styles.getPropertyValue(name).trim());
+    return Array.from({ length: count }, (_, index) => base[index % base.length]);
+  }
+
+  function drawChart(canvas, spec) {
+    if (!window.Chart) return false;
+    const styles = getComputedStyle(document.documentElement);
+    const text = styles.getPropertyValue('--bs-body-color').trim();
+    const grid = styles.getPropertyValue('--bs-border-color').trim();
+    const pie = spec.type === 'pie';
+    const colors = chartColors(pie ? spec.labels.length : spec.series.length);
+    const datasets = spec.series.map((series, index) => ({
+      label: series.name,
+      data: spec.type === 'scatter' ? series.values.map((value, i) => ({ x: Number(spec.labels[i]), y: value })) : series.values,
+      backgroundColor: pie ? colors : colors[index],
+      borderColor: pie ? styles.getPropertyValue('--bs-body-bg').trim() : colors[index],
+      borderWidth: pie ? 2 : 2,
+      pointRadius: spec.type === 'line' ? 2 : 3,
+    }));
+    new window.Chart(canvas, {
+      type: spec.type === 'scatter' ? 'scatter' : spec.type,
+      data: { labels: spec.labels, datasets: pie ? datasets.slice(0, 1) : datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: text } }, title: { display: Boolean(spec.title), text: spec.title, color: text } },
+        scales: pie ? {} : { x: { ticks: { color: text }, grid: { color: grid } }, y: { ticks: { color: text }, grid: { color: grid } } },
+      },
+    });
+    return true;
+  }
+
+  function renderResults(items) {
+    const key = JSON.stringify(items.map(item => item.task));
+    if (key === resultKey) return;
+    resultKey = key;
+    resultsBox.hidden = !items.length;
+    const body = resultsBox.querySelector('.card-body');
+    body.innerHTML = '';
+    items.forEach(item => {
+      const section = document.createElement('section');
+      section.className = 'mb-4';
+      const title = item.data?.title || item.task;
+      if (item.kind === 'download') {
+        section.innerHTML = `<h3 class="h6">${escapeHtml(item.task)}</h3><a class="btn btn-outline-primary" href="${escapeHtml(item.url)}">⇩ Download ${escapeHtml(item.name)}</a> <span class="small text-body-secondary">${formatSize(item.size)}</span>`;
+      } else if (item.kind === 'table') {
+        const columns = item.data.columns || [];
+        const rows = item.data.rows || [];
+        section.innerHTML = `<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-1"><h3 class="h6 mb-0">${escapeHtml(title)}</h3><span class="small text-body-secondary">${rows.length} row(s) · <a href="${escapeHtml(item.csv_url)}">CSV</a></span></div>
+          <div class="result-table border rounded"><table class="table table-sm table-striped mb-0 small"><thead><tr>${columns.map(column => `<th scope="col">${escapeHtml(column)}</th>`).join('')}</tr></thead>
+          <tbody>${rows.slice(0, 500).map(row => `<tr>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+      } else if (item.kind === 'chart') {
+        section.innerHTML = `<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-1"><h3 class="h6 mb-0">${escapeHtml(title)}</h3><a class="small" href="${escapeHtml(item.svg_url)}">SVG</a></div><div class="result-chart"><canvas role="img" aria-label="${escapeHtml(title)}"></canvas></div>`;
+        body.append(section);
+        if (!drawChart(section.querySelector('canvas'), item.data)) section.querySelector('.result-chart').textContent = 'Chart library unavailable; download the SVG instead.';
+        return;
+      }
+      body.append(section);
+    });
   }
 
   // ---------------------------------------------------------------- resizer
