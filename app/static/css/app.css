@@ -20,6 +20,12 @@
   --dw-failed: #d63343;
   --dw-pending: #8a94a6;
 }
+/* WCAG 2.1 AA in the light theme: darker than Bootstrap's defaults on the tinted page background. */
+:root:not([data-bs-theme="dark"]) { --bs-code-color: #a3195b; --bs-link-color: #0a58ca; --bs-link-color-rgb: 10, 88, 202; }
+:root:not([data-bs-theme="dark"]) .btn-outline-danger { --bs-btn-color: #b02a37; --bs-btn-border-color: #b02a37; }
+[data-bs-theme="dark"] .btn-outline-danger { --bs-btn-color: #ea868f; --bs-btn-border-color: #ea868f; --bs-btn-hover-color: #0a1224; --bs-btn-hover-bg: #ea868f; }
+[data-bs-theme="dark"] .list-group-item.active { color: #0a1224; }
+:root:not([data-bs-theme="dark"]) .btn-outline-secondary { --bs-btn-color: #50575d; --bs-btn-border-color: #8a939b; }
 [data-bs-theme="dark"] {
   --dw-brand: color-mix(in srgb, var(--dw-brand-custom, #2457d6) 60%, #ffffff);
   --dw-nav: #0a1224;
@@ -53,7 +59,7 @@ body { background: var(--bs-tertiary-bg); }
 .page-header { display: flex; flex-wrap: wrap; gap: .75rem; justify-content: space-between; align-items: flex-end; margin-bottom: 1rem; }
 .page-header h1 { margin: 0; }
 .page-subtitle { color: var(--bs-secondary-color); margin: .15rem 0 0; }
-.dw-footer { color: var(--bs-secondary-color); font-size: .8rem; }
+.dw-footer { color: var(--bs-body-color); font-size: .8rem; }
 
 /* Category accents shared by palette, nodes, cards, and badges */
 .cat-shell { --cat: var(--dw-cat-shell); }
@@ -227,3 +233,42 @@ a { color: var(--dw-brand); }
 :root { --dw-cat-interactive: #b4277d; }
 [data-bs-theme="dark"] { --dw-cat-interactive: #f06cb8; }
 .cat-interactive { --cat: var(--dw-cat-interactive); }
+
+/* ---------------------------------------------------------------- accessibility */
+.skip-link { position: absolute; top: .5rem; left: .5rem; z-index: 2000; padding: .5rem .75rem; background: var(--bs-body-bg); color: var(--bs-body-color); border: 2px solid var(--dw-brand); border-radius: .375rem; }
+#main:focus { outline: none; }
+a:focus-visible, button:focus-visible, .btn:focus-visible, summary:focus-visible, [tabindex]:focus-visible, .form-control:focus-visible, .form-select:focus-visible, .form-check-input:focus-visible {
+  outline: 3px solid var(--dw-brand); outline-offset: 2px;
+}
+.dw-navbar a:focus-visible, .dw-navbar button:focus-visible { outline-color: #fff; }
+.text-pre-line { white-space: pre-line; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+
+/* ---------------------------------------------------------------- footer, legal pages, cookie banner */
+.dw-footer-links { display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin-bottom: .25rem; }
+.dw-footer-links a, .dw-footer-links .btn-link { color: var(--bs-body-color); font-size: .8rem; text-decoration: underline; }
+.legal-page { max-width: 52rem; }
+.legal-page h1 { font-size: 1.6rem; }
+.legal-page h2 { font-size: 1.15rem; margin-top: 1.5rem; }
+.cookie-banner { position: fixed; inset: auto 0 0 0; z-index: 1030; padding: .9rem 0; background: var(--bs-body-bg); border-top: 1px solid var(--bs-border-color); }
+.cookie-banner[hidden] { display: none; }
+body:has(.cookie-banner:not([hidden])) { padding-bottom: 9rem; }
+
+/* ---------------------------------------------------------------- dry run */
+.task-node.dry-pending { opacity: .55; }
+.task-node.dry-running { outline: 3px solid var(--dw-running, #d69e2e); outline-offset: 2px; }
+.task-node.dry-done { box-shadow: inset 4px 0 0 var(--dw-success, #2f855a), var(--dw-shadow); }
+.task-node.dry-done .node-type::after { content: " · would succeed"; }
+.task-node.dry-failed { outline: 3px solid var(--dw-failed, #c53030); outline-offset: 2px; }
+.task-node.dry-failed .node-type::after { content: " · problem"; }
+.dry-run-panel { --bs-offcanvas-width: min(32rem, 100vw); }
+.dry-preview { max-height: 16rem; overflow: auto; background: var(--bs-tertiary-bg); border-radius: .375rem; padding: .5rem; white-space: pre-wrap; word-break: break-word; }
+.dry-task summary { cursor: pointer; }
+
+/* ---------------------------------------------------------------- chart data tables */
+.chart-data summary { cursor: pointer; font-size: .85rem; }
+/* Keep visually hidden (absolutely positioned) text inside scrolling tables, so it
+   cannot widen the page at phone width. */
+.table-responsive, .result-table { position: relative; }

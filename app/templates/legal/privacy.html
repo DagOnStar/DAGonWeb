@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+{% block title %}Privacy notice - {{ branding.site_name }}{% endblock %}
+{% block content %}
+<article class="legal-page">
+<h1>Privacy notice</h1>
+<p class="text-body-secondary">Version {{ version }}. This notice explains how {{ controller }} processes personal data in {{ branding.site_name }}, under the EU General Data Protection Regulation (GDPR, Regulation (EU) 2016/679).</p>
+
+<h2>Who is responsible</h2>
+<p>The data controller is <strong>{{ controller }}</strong>{% if controller_address %}, {{ controller_address }}{% endif %}.
+{% if contact %}Contact for privacy matters: <a href="mailto:{{ contact }}">{{ contact }}</a>.{% endif %}
+{% if dpo %}Data protection officer: <a href="mailto:{{ dpo }}">{{ dpo }}</a>.{% endif %}
+{% if not contact and not dpo %}<em>The administrator has not set a privacy contact yet.</em>{% endif %}</p>
+
+<h2>What we process, why, and on which legal basis</h2>
+<div class="table-responsive">
+<table class="table table-sm align-top">
+  <caption class="visually-hidden">Processing activities</caption>
+  <thead><tr><th scope="col">Data</th><th scope="col">Purpose</th><th scope="col">Legal basis</th><th scope="col">Kept for</th></tr></thead>
+  <tbody>
+    <tr><th scope="row">Account: email address, display name, password hash{% if sso_providers %} or single sign-on identifier{% endif %}, roles, last sign-in, accepted notice version</th><td>Providing your account and signing you in</td><td>Contract (Art. 6(1)(b))</td><td>Until you delete your account</td></tr>
+    <tr><th scope="row">Workflows you create and the runs you start: documents, logs, files in the scratch area</th><td>Designing and executing your workflows</td><td>Contract (Art. 6(1)(b))</td><td>{% if run_retention %}Runs: {{ run_retention }} days after they finish; workflows until you delete them{% else %}Until you delete them or your account{% endif %}</td></tr>
+    <tr><th scope="row">Audit log: time, action, account, IP address</th><td>Security of the service and investigation of abuse</td><td>Legitimate interest (Art. 6(1)(f)); security of processing (Art. 32)</td><td>{% if audit_retention %}{{ audit_retention }} days{% else %}As long as the administrator keeps it{% endif %}</td></tr>
+    <tr><th scope="row">Registration links (email address)</th><td>Verifying your email address</td><td>Steps prior to a contract (Art. 6(1)(b))</td><td>24 hours, then deleted at the next clean-up</td></tr>
+    <tr><th scope="row">Cookies and browser storage</th><td>Sign-in, security, and (only with consent) your preferences</td><td>Strictly necessary (ePrivacy Art. 5(3)); consent for preferences (Art. 6(1)(a))</td><td>See the <a href="{{ url_for('legal.cookies') }}">cookie policy</a></td></tr>
+    {% if playground %}<tr><th scope="row">Guest playground</th><td>Trying the editor without an account</td><td>Legitimate interest (Art. 6(1)(f))</td><td>The workflow stays in your browser tab; a dry run is checked and immediately discarded, it is not stored or logged</td></tr>{% endif %}
+  </tbody>
+</table>
+</div>
+<p>We do not use your data for profiling, advertising or automated decisions with legal effects. Workflows you mark as public can be read and run by other signed-in users.</p>
+
+<h2>Who receives the data</h2>
+<ul>
+  <li>Administrators of this service, and the hosting provider operating its servers, as processors.</li>
+  {% if smtp_enabled %}<li>The configured email server, to deliver registration and service messages.</li>{% endif %}
+  {% if sso_providers %}<li>When you choose to sign in with {{ sso_providers|join(', ') }}: that provider receives the sign-in request and returns your identifier, name and email address.</li>{% endif %}
+  {% if llm_enabled %}<li>When you use the workflow assistant: the language-model service at <code>{{ llm_base_url }}</code> receives your messages and the workflow you are editing (not your run files). It may be located outside the European Economic Area; in that case transfers rely on the safeguards agreed with that provider (Art. 46).</li>{% endif %}
+  {% if redis_enabled %}<li>The run queue (Redis) holds run identifiers only.</li>{% endif %}
+  <li>Pages load style sheets and scripts from {% for host, what in third_party %}<code>{{ host }}</code> ({{ what }}){{ ', ' if not loop.last }}{% endfor %}. These content delivery networks receive your IP address and browser details when they serve the files; they set no cookies.</li>
+</ul>
+
+<h2>Your rights</h2>
+<p>You can exercise these rights at any time, free of charge:</p>
+<ul>
+  <li><strong>Access and portability</strong> (Art. 15, 20): download all your data as JSON from <a href="{{ url_for('account.index') }}">your account</a>.</li>
+  <li><strong>Rectification</strong> (Art. 16): change your display name on the account page; ask the contact above for anything else.</li>
+  <li><strong>Erasure</strong> (Art. 17): delete your account, workflows, runs and files from the account page. Audit entries are kept for their retention period but detached from you.</li>
+  <li><strong>Restriction and objection</strong> (Art. 18, 21), and <strong>withdrawal of consent</strong> (Art. 7(3)) through the <em>Cookie settings</em> link in the page footer.</li>
+  <li><strong>Complaint</strong> to a supervisory authority (Art. 77){% if authority %}: {{ authority }}{% else %}, in particular in the EU country where you live or work{% endif %}.</li>
+</ul>
+
+<h2>Security</h2>
+<p>Passwords are stored as salted hashes; sessions use HttpOnly, SameSite cookies; forms are protected against cross-site request forgery; each run's files are confined to its scratch directory; and the audit log records security-relevant events.</p>
+
+{% if extra %}<h2>More information</h2><p class="text-pre-line">{{ extra }}</p>{% endif %}
+</article>
+{% endblock %}

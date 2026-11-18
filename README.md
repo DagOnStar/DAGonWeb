@@ -46,6 +46,9 @@ The project targets **DAGonStar 2.9.4** (pinned in [requirements.txt](requiremen
   - Local accounts with email-verified registration and domain restrictions, plus single sign-on with Google, Microsoft Entra ID (academic and work accounts) or any OpenID Connect provider.
   - Flask-WTF CSRF protection; file access is confined to the configured scratch root.
 - **Administration panel** ([docs](docs/administration.md)): run statistics, audit log with CSV export, appearance (site name, tagline, logo, colors, default theme), authentication, execution back-end, scratch and retention, SMTP, and the LLM connector. Every setting can also be pinned with a `DAGONWEB_<KEY>` environment variable.
+- **Try it without an account.** Visitors open any template in a guest playground and press **Dry run**: DAGonWeb checks the workflow and plays back how DAGonStar would execute it, stage by stage, without executing anything or storing it on the server ([docs](docs/playground.md)).
+- **GDPR-ready.** Configurable privacy notice and cookie policy, a cookie banner with equal “Accept all” / “Necessary only” choices, consent at registration and on notice changes, self-service data export and account erasure, administrator tools for data requests, and retention clean-up ([docs](docs/privacy_gdpr.md)).
+- **Accessible.** Built for WCAG 2.1 AA (EN 301 549): skip link, landmarks, keyboard alternatives to drag and drop, linked form errors, live status messages, contrast-checked themes and brand colors, reduced motion, chart data tables, and an accessibility statement ([docs](docs/accessibility.md)).
 - **Scalable execution.** Runs execute in a bounded pool of threads, or, for many concurrent runs, on a **Redis queue** served by any number of workers ([docs](docs/deployment.md#redis-queue-for-many-concurrent-runs)).
 
 ## Screenshots
@@ -233,7 +236,7 @@ pytest                                   # full test suite, including end-to-end
 flask --app wsgi export-examples         # regenerate examples/*.json from the built-in templates
 flask --app wsgi db migrate -m "change"  # create a migration after changing app/models.py
 flask --app wsgi worker                  # Redis run worker (execution backend "redis")
-flask --app wsgi cleanup-runs            # delete finished runs past the retention period
+flask --app wsgi cleanup-runs            # apply retention: runs, audit log, registration links
 ```
 
 ## Examples
@@ -251,6 +254,9 @@ flask --app wsgi cleanup-runs            # delete finished runs past the retenti
 - [Execution model](docs/execution_model.md)
 - [Workflow API](docs/api.md)
 - [Administration](docs/administration.md)
+- [Guest playground](docs/playground.md)
+- [Privacy and GDPR](docs/privacy_gdpr.md)
+- [Accessibility](docs/accessibility.md)
 - [Installation](docs/installation.md)
 - [Configuration](docs/configuration.md)
 - [Architecture](docs/architecture.md)

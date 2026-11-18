@@ -5,7 +5,7 @@ from flask import Blueprint, abort, current_app, flash, redirect, render_templat
 from flask_login import current_user, login_required, login_user, logout_user
 from .forms import CompleteRegistrationForm, LoginForm, RegisterForm
 from . import sso
-from .. import audit, settings
+from .. import audit, privacy, settings
 from ..extensions import db
 from ..mail import send_mail
 from ..models import RegistrationToken, Role, User
@@ -98,10 +98,11 @@ def complete_registration():
             db.session.commit()
             flash("Account already exists. Please sign in.", "warning")
             return redirect(url_for("auth.login"))
-        user = User(email=record.email, name=record.email, active=True, roles=default_role())
+        user = User(email=record.email, name=(form.name.data or "").strip() or record.email, active=True, roles=default_role())
         user.set_password(form.password.data)
         record.used_at = datetime.now(timezone.utc)
         db.session.add(user)
+        privacy.accept_policy(user)
         db.session.flush()
         audit.record("auth.register", user.email, "local", user_id=user.id)
         db.session.commit()

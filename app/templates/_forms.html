@@ -1,0 +1,34 @@
+{# Accessible WTForms rendering: visible label, help and error text linked with
+   aria-describedby, aria-invalid on errors (WCAG 1.3.1, 3.3.1, 3.3.2, 4.1.2). #}
+{% macro field(f, help='', input_class='form-control', wrapper='mb-3') -%}
+{%- set help_id = f.id ~ '-help' -%}
+{%- set error_id = f.id ~ '-error' -%}
+{%- set describedby = ([help_id] if help else []) + ([error_id] if f.errors else []) -%}
+{%- set attrs = {} -%}
+{%- if describedby %}{% set _ = attrs.update({'aria-describedby': describedby|join(' ')}) %}{% endif -%}
+{%- if f.errors %}{% set _ = attrs.update({'aria-invalid': 'true'}) %}{% endif -%}
+<div class="{{ wrapper }}">
+  {%- if f.type == 'BooleanField' %}
+  <div class="form-check">
+    {{ f(class='form-check-input' ~ (' is-invalid' if f.errors else ''), **attrs) }}
+    {{ f.label(class='form-check-label') }}{{ caller() if caller }}
+  </div>
+  {%- else %}
+  {{ f.label(class='form-label') }}
+  {{ f(class=input_class ~ (' is-invalid' if f.errors else ''), **attrs) }}
+  {%- endif %}
+  {% if help %}<div class="form-text" id="{{ help_id }}">{{ help|safe }}</div>{% endif %}
+  {% if f.errors %}<div class="invalid-feedback d-block" id="{{ error_id }}">{{ f.errors|join(' ') }}</div>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro error_summary(forms) -%}
+{%- set problems = [] -%}
+{%- for form in forms %}{% for f in form %}{% for error in f.errors %}{% set _ = problems.append((f, error)) %}{% endfor %}{% endfor %}{% endfor -%}
+{%- if problems %}
+<div class="alert alert-danger" role="alert" tabindex="-1" id="errorSummary">
+  <h2 class="h6 mb-1">Please correct {{ 'this problem' if problems|length == 1 else 'these problems' }}:</h2>
+  <ul class="mb-0">{% for f, error in problems %}<li><a class="alert-link" href="#{{ f.id }}">{{ f.label.text }}: {{ error }}</a></li>{% endfor %}</ul>
+</div>
+{%- endif %}
+{%- endmacro %}

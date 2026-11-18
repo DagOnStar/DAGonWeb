@@ -6,8 +6,9 @@
   <meta name="theme-color" content="{{ branding.navbar_color }}">
   <meta name="description" content="{{ branding.site_name }}: {{ branding.tagline or 'design, run and inspect DAGonStar workflows.' }}">
   <title>{% block title %}{{ branding.site_name }}{% endblock %}</title>
+  <script src="{{ url_for('static', filename='js/consent.js') }}"></script>
   <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" crossorigin="anonymous" referrerpolicy="no-referrer">
   <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
   <link rel="icon" href="{{ branding.logo_url }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
@@ -15,11 +16,11 @@
   {% block head %}{% endblock %}
 </head>
 <body>
-<a class="visually-hidden-focusable position-absolute top-0 start-0 p-2 bg-body" href="#main">Skip to content</a>
+<a class="visually-hidden-focusable skip-link" href="#main">Skip to main content</a>
 {% set endpoint = request.endpoint or '' %}
 <nav class="navbar navbar-expand-lg navbar-dark dw-navbar" aria-label="Main navigation">
   <div class="container-fluid">
-    <a class="navbar-brand" href="{{ url_for('workflows.list_workflows') if current_user.is_authenticated else url_for('auth.login') }}">
+    <a class="navbar-brand" href="{{ url_for('index') }}">
       <img class="dw-logo" src="{{ branding.logo_url }}" alt="" width="26" height="26"><span>{{ branding.site_name }}</span>
     </a>
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav" aria-controls="nav" aria-expanded="false" aria-label="Toggle navigation"><span class="navbar-toggler-icon"></span></button>
@@ -29,7 +30,9 @@
           {% set on_runs = endpoint in ['workflows.list_runs', 'workflows.run_detail', 'workflows.edit_run'] %}
           <li class="nav-item"><a class="nav-link {% if endpoint.startswith('workflows.') and not on_runs %}active{% endif %}" href="{{ url_for('workflows.list_workflows') }}" {% if endpoint.startswith('workflows.') and not on_runs %}aria-current="page"{% endif %}>Workflows</a></li>
           <li class="nav-item"><a class="nav-link {% if on_runs %}active{% endif %}" href="{{ url_for('workflows.list_runs') }}" {% if on_runs %}aria-current="page"{% endif %}>Runs</a></li>
-          {% if current_user.has_role('admin') %}<li class="nav-item"><a class="nav-link {% if endpoint.startswith('admin.') %}active{% endif %}" href="{{ url_for('admin.dashboard') }}">Admin</a></li>{% endif %}
+          {% if current_user.has_role('admin') %}<li class="nav-item"><a class="nav-link {% if endpoint.startswith('admin.') %}active{% endif %}" href="{{ url_for('admin.dashboard') }}" {% if endpoint.startswith('admin.') %}aria-current="page"{% endif %}>Admin</a></li>{% endif %}
+        {% elif guest_playground %}
+          <li class="nav-item"><a class="nav-link {% if endpoint.startswith('playground.') %}active{% endif %}" href="{{ url_for('playground.index') }}" {% if endpoint.startswith('playground.') %}aria-current="page"{% endif %}>Try it</a></li>
         {% endif %}
       </ul>
       <ul class="navbar-nav align-items-lg-center">
@@ -42,7 +45,7 @@
           </ul>
         </li>
         {% if current_user.is_authenticated %}
-          <li class="nav-item"><span class="navbar-text mx-lg-2">{{ current_user.name }}</span></li>
+          <li class="nav-item"><a class="nav-link {% if endpoint.startswith('account.') %}active{% endif %}" href="{{ url_for('account.index') }}" {% if endpoint.startswith('account.') %}aria-current="page"{% endif %} title="Your account and personal data">{{ current_user.name }}</a></li>
           <li class="nav-item"><a class="nav-link" href="{{ url_for('auth.logout') }}">Logout</a></li>
         {% else %}
           <li class="nav-item"><a class="nav-link" href="{{ url_for('auth.login') }}">Login</a></li>
@@ -52,16 +55,53 @@
     </div>
   </div>
 </nav>
-<main id="main" class="container-fluid py-3">
+<main id="main" class="container-fluid py-3" tabindex="-1">
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% for category, message in messages %}
-      <div class="alert alert-{{ 'info' if category == 'message' else category }} alert-dismissible fade show" role="alert">{{ message }}<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button></div>
+      <div class="alert alert-{{ 'info' if category == 'message' else category }} alert-dismissible fade show" role="{{ 'alert' if category in ('danger', 'warning') else 'status' }}">{{ message }}<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Dismiss message"></button></div>
     {% endfor %}
   {% endwith %}
   {% block content %}{% endblock %}
 </main>
-<footer class="dw-footer container-fluid pb-3">{% if branding.footer_text %}{{ branding.footer_text }} · {% endif %}{{ branding.site_name }} · DAGonStar {{ dagonstar_version }} runtime</footer>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<footer class="dw-footer container-fluid pb-3">
+  <nav aria-label="Legal and accessibility" class="dw-footer-links">
+    <a href="{{ url_for('legal.privacy_notice') }}">Privacy notice</a>
+    <a href="{{ url_for('legal.cookies') }}">Cookies</a>
+    <button type="button" class="btn btn-link p-0 align-baseline" data-bs-toggle="modal" data-bs-target="#cookieSettings">Cookie settings</button>
+    <a href="{{ url_for('legal.accessibility') }}">Accessibility</a>
+  </nav>
+  <p class="mb-0">{% if branding.footer_text %}{{ branding.footer_text }} · {% endif %}{{ branding.site_name }} · DAGonStar {{ dagonstar_version }} runtime</p>
+</footer>
+<section id="cookieBanner" class="cookie-banner shadow" aria-labelledby="cookieBannerTitle" data-enabled="{{ '1' if cookie_banner else '0' }}" hidden>
+  <div class="container-fluid d-flex flex-column flex-md-row gap-3 align-items-md-center">
+    <div class="flex-grow-1">
+      <h2 class="h6 mb-1" id="cookieBannerTitle">Cookies on {{ branding.site_name }}</h2>
+      <p class="small mb-0">We use cookies that are strictly necessary for signing in and security. With your permission we also remember preferences, such as your theme, in this browser. There are no advertising or tracking cookies. <a href="{{ url_for('legal.cookies') }}">Cookie policy</a> · <a href="{{ url_for('legal.privacy_notice') }}">Privacy notice</a></p>
+    </div>
+    <div class="d-flex flex-wrap gap-2 flex-shrink-0">
+      <button type="button" class="btn btn-sm btn-primary" data-consent="all">Accept all</button>
+      <button type="button" class="btn btn-sm btn-primary" data-consent="necessary">Necessary only</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#cookieSettings">Customize</button>
+    </div>
+  </div>
+</section>
+<div class="modal fade" id="cookieSettings" tabindex="-1" aria-labelledby="cookieSettingsTitle" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+    <div class="modal-header"><h2 class="modal-title h5" id="cookieSettingsTitle">Cookie settings</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+    <div class="modal-body">
+      {% for key, label, description in cookie_categories %}
+      <div class="form-check form-switch mb-3">
+        <input class="form-check-input" type="checkbox" role="switch" id="consent{{ key|capitalize }}" aria-describedby="consent{{ key|capitalize }}Help" {% if key == 'necessary' %}checked disabled{% endif %}>
+        <label class="form-check-label fw-semibold" for="consent{{ key|capitalize }}">{{ label }}{% if key == 'necessary' %} (always on){% endif %}</label>
+        <div class="form-text" id="consent{{ key|capitalize }}Help">{{ description }}</div>
+      </div>
+      {% endfor %}
+      <p class="small mb-0">Details in the <a href="{{ url_for('legal.cookies') }}">cookie policy</a>. You can change your choice at any time from the page footer.</p>
+    </div>
+    <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-consent="necessary">Necessary only</button><button type="button" class="btn btn-primary" data-consent="save">Save choice</button></div>
+  </div></div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script>if('serviceWorker' in navigator){navigator.serviceWorker.register('{{ url_for('service_worker') }}', {scope: '/'});}</script>
 {% block scripts %}{% endblock %}
 </body>

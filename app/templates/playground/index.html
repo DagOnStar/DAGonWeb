@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+{% block title %}Try {{ branding.site_name }} - Playground{% endblock %}
+{% block content %}
+<div class="page-header mb-3">
+  <div>
+    <h1 class="h4">Try {{ branding.site_name }}</h1>
+    <p class="page-subtitle mb-0">{{ branding.tagline }} No account needed: pick a template, edit it, and press <strong>Dry run</strong> to see how DAGonStar would execute it. Nothing runs and nothing is stored on the server.</p>
+  </div>
+  <div class="d-flex flex-wrap gap-2">
+    <a class="btn btn-primary" href="{{ url_for('playground.editor', template='empty') }}">Start from an empty canvas</a>
+    <a class="btn btn-outline-secondary" href="{{ url_for('auth.login') }}">Sign in</a>
+  </div>
+</div>
+<h2 class="h6 text-uppercase text-body-secondary">Start from a template</h2>
+<ul class="row row-cols-1 row-cols-sm-2 row-cols-lg-4 row-cols-xxl-6 g-2 list-unstyled" aria-label="Workflow templates">
+  {% for card in templates %}
+  <li class="col">
+    <a class="card template-card cat-{{ card.category }} h-100 text-decoration-none text-body" href="{{ url_for('playground.editor', template=card.key) }}">
+      <div class="card-body p-2">
+        <div class="d-flex align-items-center gap-2 mb-1"><span class="type-icon" aria-hidden="true">{{ card.icon }}</span><strong class="small">{{ card.label }}</strong></div>
+        <div class="small text-body-secondary">{{ card.description }}</div>
+      </div>
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+{% endblock %}

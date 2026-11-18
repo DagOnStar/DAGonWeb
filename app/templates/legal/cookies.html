@@ -1,0 +1,26 @@
+{% extends 'base.html' %}
+{% block title %}Cookie policy - {{ branding.site_name }}{% endblock %}
+{% block content %}
+<article class="legal-page">
+<h1>Cookie policy</h1>
+<p>{{ branding.site_name }} uses only first-party cookies and browser storage. There are no advertising, analytics or social-media trackers. Strictly necessary items do not need consent; preferences are used only if you allow them.</p>
+<p><button type="button" class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#cookieSettings">Change your cookie settings</button></p>
+{% for key, label, description in categories %}
+<h2>{{ label }}</h2>
+<p>{{ description }}</p>
+<div class="table-responsive">
+<table class="table table-sm">
+  <caption class="visually-hidden">{{ label }} cookies and storage</caption>
+  <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Purpose</th><th scope="col">Duration</th></tr></thead>
+  <tbody>
+  {% for item in storage_items if item.category == key %}
+    <tr><th scope="row"><code>{{ item.name }}</code></th><td>{{ item.kind }}</td><td>{{ item.purpose }}</td><td>{{ item.duration }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endfor %}
+<h2>Third-party content</h2>
+<p>Style sheets and scripts are served by {% for host, what in third_party %}<code>{{ host }}</code> ({{ what }}){{ ', ' if not loop.last else '.' }}{% endfor %} These services set no cookies, but they receive your IP address when they deliver the files. See the <a href="{{ url_for('legal.privacy_notice') }}">privacy notice</a>.</p>
+</article>
+{% endblock %}

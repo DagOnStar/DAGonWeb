@@ -10,7 +10,7 @@
       <a class="list-group-item list-group-item-action {% if endpoint.startswith('admin.user') %}active{% endif %}" href="{{ url_for('admin.users') }}">👤 Users</a>
       <a class="list-group-item list-group-item-action {% if endpoint.startswith('admin.role') %}active{% endif %}" href="{{ url_for('admin.roles') }}">🛡 Roles &amp; permissions</a>
       {% for key, label, _ in admin_sections %}
-        <a class="list-group-item list-group-item-action {% if current_section == key %}active{% endif %}" href="{{ url_for('admin.settings_section', section=key) }}">{{ {'appearance': '🎨', 'authentication': '🔐', 'execution': '⚙', 'storage': '💾', 'smtp': '✉', 'llm': '✨'}[key] }} {{ label }}</a>
+        <a class="list-group-item list-group-item-action {% if current_section == key %}active{% endif %}" href="{{ url_for('admin.settings_section', section=key) }}">{{ {'appearance': '🎨', 'authentication': '🔐', 'execution': '⚙', 'storage': '💾', 'smtp': '✉', 'llm': '✨', 'privacy': '🛡', 'accessibility': '♿'}.get(key, '•') }} {{ label }}</a>
       {% endfor %}
       <a class="list-group-item list-group-item-action {% if endpoint == 'admin.dagon_ini' %}active{% endif %}" href="{{ url_for('admin.dagon_ini') }}">🧩 DAGonStar dagon.ini</a>
       <a class="list-group-item list-group-item-action {% if endpoint == 'admin.logs' %}active{% endif %}" href="{{ url_for('admin.logs') }}">📜 Audit log</a>

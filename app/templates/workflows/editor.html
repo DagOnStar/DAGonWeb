@@ -1,17 +1,30 @@
 {% extends 'base.html' %}
-{% block title %}{{ workflow.name }} - Editor{% endblock %}
+{% set wf_name = workflow_name if guest else workflow.name %}
+{% block title %}{{ wf_name }} - {{ 'Playground' if guest else 'Editor' }}{% endblock %}
 {% block content %}
+{% if guest %}
+<div class="alert alert-info d-flex flex-wrap align-items-center gap-2 py-2 small" role="note">
+  <span><strong>Guest playground.</strong> Edit freely: the workflow stays in this browser tab and is not stored on the server. <strong>▶ Dry run</strong> checks it and shows how DAGonStar would run it, without executing anything.</span>
+  {% if registration_open %}<a class="btn btn-sm btn-primary ms-auto" href="{{ url_for('auth.register') }}">Create a free account to run it for real</a>{% else %}<a class="btn btn-sm btn-outline-primary ms-auto" href="{{ url_for('auth.login') }}">Sign in to run it for real</a>{% endif %}
+</div>
+{% endif %}
 <div class="page-header mb-2">
   <div>
-    <h1 class="h4">{{ workflow.name }}</h1>
+    <h1 class="h4">{{ wf_name }}</h1>
     <p class="page-subtitle small">
-      DAGonStar workflow editor{% if not editable %} · read only{% endif %}
-      {% if workflow.runtime_options.get('portable_emulation') %} · <span class="badge text-bg-warning" title="Container, scheduler, cloud and LLM tasks run locally without contacting their back-end">portable emulation</span>{% endif %}
+      {% if guest %}DAGonStar workflow editor · dry-run mode{% else %}DAGonStar workflow editor{% if not editable %} · read only{% endif %}
+      {% if workflow.runtime_options.get('portable_emulation') %} · <span class="badge text-bg-warning" title="Container, scheduler, cloud and LLM tasks run locally without contacting their back-end">portable emulation</span>{% endif %}{% endif %}
       · <span id="saveStatus" class="editor-status" role="status" aria-live="polite">Loading…</span>
     </p>
   </div>
   <div class="d-flex flex-wrap gap-2 align-items-center">
     <button id="autoLayout" class="btn btn-sm btn-outline-secondary" type="button" {% if not editable %}disabled{% endif %} title="Arrange tasks in dependency layers">Organize</button>
+    {% if guest %}
+    <button class="btn btn-sm btn-outline-secondary" type="button" id="guestDownload">Download JSON</button>
+    <button class="btn btn-sm btn-outline-secondary" type="button" id="guestOpen">Open JSON</button>
+    <input type="file" id="guestImport" accept=".json,application/json" hidden aria-label="Open a DAGonStar JSON document">
+    <button class="btn btn-sm btn-outline-secondary" type="button" id="guestReset">Reset</button>
+    {% else %}
     <div class="dropdown">
       <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">Export</button>
       <ul class="dropdown-menu dropdown-menu-end">
@@ -25,17 +38,20 @@
     </div>
     {% if editable %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workflows.workflow_setup', workflow_id=workflow.id) }}">Setup</a>{% endif %}
     {% if editable and current_user.can('assistant.use') %}<button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="offcanvas" data-bs-target="#assistantPanel" aria-controls="assistantPanel">✨ Assistant</button>{% endif %}
+    {% endif %}
     <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="modal" data-bs-target="#shortcutsModal" aria-label="Keyboard shortcuts">?</button>
-    <form class="d-inline" method="post" action="{{ url_for('workflows.run_workflow', workflow_id=workflow.id) }}" id="runForm">
+    {% if not guest %}<button class="btn btn-sm btn-outline-secondary" type="button" id="dryRunButton">Dry run</button>{% endif %}
+    <form class="d-inline" method="post" action="{{ '#' if guest else url_for('workflows.run_workflow', workflow_id=workflow.id) }}" id="runForm">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button class="btn btn-sm btn-success" id="runButton">▶ Run</button>
+      <button class="btn btn-sm btn-success" id="runButton">{{ '▶ Dry run' if guest else '▶ Run' }}</button>
     </form>
   </div>
 </div>
 
 <div id="editor"
-     data-graph-url="{{ url_for('workflows.graph', workflow_id=workflow.id) }}"
-     data-save-url="{{ url_for('workflows.save_graph', workflow_id=workflow.id) }}"
+     {% if guest %}data-mode="guest" data-template="{{ template }}" data-graph-url="{{ graph_url }}"{% else %}data-graph-url="{{ url_for('workflows.graph', workflow_id=workflow.id) }}"
+     data-save-url="{{ url_for('workflows.save_graph', workflow_id=workflow.id) }}"{% endif %}
+     data-dry-run-url="{{ url_for('playground.dry_run') }}"
      data-csrf="{{ csrf_token() }}"
      data-editable="{{ '1' if editable else '0' }}">
   <aside id="palette" class="card" aria-label="Task palette">
@@ -111,7 +127,14 @@
     </div>
   </div></div>
 </div>
-{% if editable and current_user.can('assistant.use') %}
+<div class="offcanvas offcanvas-end dry-run-panel" tabindex="-1" id="dryRunPanel" aria-labelledby="dryRunTitle">
+  <div class="offcanvas-header border-bottom py-2">
+    <h2 class="offcanvas-title h5" id="dryRunTitle">Dry run</h2>
+    <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+  </div>
+  <div class="offcanvas-body" id="dryRunBody" aria-live="polite"></div>
+</div>
+{% if not guest and editable and current_user.can('assistant.use') %}
 <div class="offcanvas offcanvas-end" tabindex="-1" id="assistantPanel" aria-labelledby="assistantTitle"
      data-workflow-id="{{ workflow.id }}" data-csrf="{{ csrf_token() }}" data-enabled="{{ '1' if assistant_enabled else '0' }}"
      data-chat-url="{{ url_for('assistant.chat', workflow_id=workflow.id) }}"

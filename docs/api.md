@@ -28,6 +28,22 @@ All workflow endpoints need a signed-in user. They allow a request only from the
 | `POST` | `/assistant/workflows/<id>/chat` | Body `{messages, draft}`. Runs the agent and returns `{reply, trace, changed, draft, check}`. `503` when the connector is disabled, `403` without `assistant.use`. |
 | `POST` | `/assistant/workflows/<id>/validate` | Body `{draft}`. Static checks and DAGonStar dry run of a document, without an LLM. |
 
+## Guest, privacy and account endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/try/`, `/try/<template>` | Guest playground (no sign-in; off when `guest_playground_enabled` is false). |
+| `GET` | `/try/<template>.json` | The template's DAGonStar document (`empty` for a blank one). |
+| `POST` | `/try/dry-run` | Body: a DAGonStar document. Returns `{ok, problems, warnings, dagonstar, stages, tasks}`. Never executes or stores anything. Also available to signed-in users. |
+| `GET` | `/privacy`, `/cookies`, `/accessibility` | Privacy notice, cookie policy, accessibility statement. |
+| `GET`/`POST` | `/privacy/accept` | Accept the current privacy notice version. Until then, HTML requests are redirected here and mutations return `428`. |
+| `GET` | `/account/` | Profile, password, data export and deletion. |
+| `POST` | `/account/profile`, `/account/password` | Rectify the display name; change the password (local accounts). |
+| `GET` | `/account/export` | Download all personal data as JSON. |
+| `POST` | `/account/delete` | Erase the account and its data (confirm with the email address and, for local accounts, the password). |
+| `GET` | `/admin/users/<id>/export` | Administrator: a user's data export. |
+| `POST` | `/admin/users/<id>/erase` | Administrator: erase a user (`confirm=1`). |
+
 ## Permissions
 
 Creating and importing workflows needs `workflows.create`, starting or resuming runs needs `workflows.run`, making a workflow public needs `workflows.publish`. See [administration.md](administration.md).

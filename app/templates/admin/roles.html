@@ -10,7 +10,7 @@
       <td>{% if role.name == 'admin' %}<span class="badge text-bg-danger">all permissions</span>{% else %}{% for permission in role.permissions %}<span class="badge text-bg-light border me-1" title="{{ permissions[permission] }}">{{ permission }}</span>{% else %}<span class="text-body-secondary small">none</span>{% endfor %}{% endif %}</td>
       <td>{{ role.users.count() }}</td>
       <td class="text-end text-nowrap"><a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin.role_edit', role_id=role.id) }}">Edit</a>
-        {% if role.name not in protected %}<form method="post" action="{{ url_for('admin.role_delete', role_id=role.id) }}" class="d-inline" onsubmit="return confirm('Delete role {{ role.name }}?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-danger">Delete</button></form>{% endif %}</td></tr>
+        {% if role.name not in protected %}<form method="post" action="{{ url_for('admin.role_delete', role_id=role.id) }}" class="d-inline" data-confirm="Delete role {{ role.name }}?" onsubmit="return confirm(this.dataset.confirm);"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-danger">Delete</button></form>{% endif %}</td></tr>
   {% endfor %}
   </tbody></table></div></div>
 {% endblock %}

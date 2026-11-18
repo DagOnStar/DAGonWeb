@@ -31,6 +31,9 @@ DAGonWeb is a Flask/Bootstrap Progressive Web Application for creating, editing,
   - The examples are up to date.
 - Add an Alembic migration in `migrations/versions/` for every model change.
 - Check UI changes in a browser: light and dark themes, and phone width with no horizontal scroll.
+- Accessibility (WCAG 2.1 AA): render forms with the `_forms.html` macros, give every control a label, keep text contrast at 4.5:1 in both themes, keep keyboard alternatives for pointer interactions, and keep `tests/test_compliance.py` passing.
+- GDPR: new cookies or browser storage must be listed in `STORAGE_ITEMS` in `app/privacy.py` (and preferences written only when `DAGonWebConsent.allows('preferences')`). New personal data must be included in `export_user_data()` and removed or anonymised by `erase_user()`.
+- The guest playground (`app/playground.py`) must never execute workflows, import Native code, or store anything for anonymous visitors.
 
 ## Commands
 ```bash

@@ -21,6 +21,11 @@
   const statusEl = document.getElementById('saveStatus');
   const emptyHint = document.getElementById('canvasEmpty');
   const editable = root.dataset.editable === '1';
+  // Guest playground: the workflow lives in this tab only and "Run" is a dry run.
+  const guest = root.dataset.mode === 'guest';
+  const guestKey = `dagonweb.playground.${root.dataset.template || 'empty'}`;
+  const allowsPreferences = () => window.DAGonWebConsent?.allows('preferences') ?? false;
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
   const SPEC_GROUPS = JSON.parse(document.getElementById('taskSpecs').textContent);
   const SPECS = Object.fromEntries(SPEC_GROUPS.flatMap(group => group.types).map(spec => [spec.type, spec]));
@@ -121,13 +126,22 @@
 
   // ------------------------------------------------------------------ load/save
   async function load() {
-    const response = await fetch(root.dataset.graphUrl, { headers: { Accept: 'application/json' } });
-    if (!response.ok) {
-      setStatus('Unable to load the workflow', 'error');
-      return;
+    let kept = null;
+    if (guest) {
+      try { kept = JSON.parse(sessionStorage.getItem(guestKey) || 'null'); } catch { kept = null; }
     }
-    fromDocument(await response.json());
-    setStatus(editable ? 'All changes saved' : 'Read only', editable ? 'saved' : '');
+    if (kept && kept.tasks) {
+      fromDocument(kept);
+    } else {
+      const response = await fetch(root.dataset.graphUrl, { headers: { Accept: 'application/json' } });
+      if (!response.ok) {
+        setStatus('Unable to load the workflow', 'error');
+        return;
+      }
+      fromDocument(await response.json());
+    }
+    if (guest) setStatus('Kept in this tab only', 'saved');
+    else setStatus(editable ? 'All changes saved' : 'Read only', editable ? 'saved' : '');
     render();
     showEmptyInspector();
     if (graph.tasks.length) requestAnimationFrame(() => fit(false));
@@ -180,6 +194,15 @@
   function save() {
     clearTimeout(saveTimer);
     if (!editable) return Promise.resolve();
+    if (guest) {
+      try {
+        sessionStorage.setItem(guestKey, JSON.stringify(toDocument()));
+        setStatus('Kept in this tab only', 'saved');
+      } catch {
+        setStatus('Not kept: this browser blocks tab storage', 'error');
+      }
+      return Promise.resolve(true);
+    }
     const body = JSON.stringify(toDocument());
     saving = saving.then(async () => {
       setStatus('Saving…', 'saving');
@@ -661,7 +684,7 @@
       editor.setTheme(dark ? 'ace/theme/tomorrow_night' : 'ace/theme/github');
       editor.session.setMode(textarea.dataset.mode === 'python' ? 'ace/mode/python' : 'ace/mode/sh');
       editor.setValue(textarea.value, -1);
-      editor.setOptions({ fontSize: '13px', showPrintMargin: false, wrap: true, tabSize: textarea.dataset.mode === 'python' ? 4 : 2, useSoftTabs: true, readOnly: !editable });
+      editor.setOptions({ fontSize: '13px', showPrintMargin: false, wrap: true, enableKeyboardAccessibility: true, tabSize: textarea.dataset.mode === 'python' ? 4 : 2, useSoftTabs: true, readOnly: !editable });
       editor.session.on('change', () => { textarea.value = editor.getValue(); });
       editor.on('focus', () => { lastFocused = editor; });
       editor.commands.addCommand({ name: 'apply', bindKey: { win: 'Ctrl-Enter', mac: 'Command-Enter' }, exec: () => applyInspector(findTask(selected)) });
@@ -970,10 +993,11 @@
     if (task && inspectorDirty() && !applyInspector(task)) return;
     if (editable && !(await save())) return;
     if (!graph.tasks.length) { setStatus('Add at least one task before running', 'error'); return; }
+    if (guest) { dryRun(); return; }
     event.target.submit();
   });
   window.addEventListener('beforeunload', event => {
-    if (editable && (inspectorDirty() || statusEl.classList.contains('saving') || statusEl.classList.contains('error'))) {
+    if (!guest && editable && (inspectorDirty() || statusEl.classList.contains('saving') || statusEl.classList.contains('error'))) {
       event.preventDefault();
       event.returnValue = '';
     }
@@ -998,7 +1022,7 @@
     root.style.setProperty('--inspector-width', `${value}px`);
     resizer.setAttribute('aria-valuemax', String(Math.round(max)));
     resizer.setAttribute('aria-valuenow', String(Math.round(value)));
-    try { localStorage.setItem('dagonweb.inspector-width', String(Math.round(value))); } catch { /* ignore */ }
+    if (allowsPreferences()) { try { localStorage.setItem('dagonweb.inspector-width', String(Math.round(value))); } catch { /* ignore */ } }
     aceEditors.forEach(item => item.editor.resize());
   }
   toggleFull.addEventListener('click', () => setExpanded(!root.classList.contains('inspector-expanded')));
@@ -1016,10 +1040,121 @@
     const current = parseFloat(getComputedStyle(root).getPropertyValue('--inspector-width')) || 360;
     setInspectorWidth(current + (event.key === 'ArrowLeft' ? 20 : -20));
   });
-  try {
-    const saved = Number(localStorage.getItem('dagonweb.inspector-width'));
-    if (saved) setInspectorWidth(saved);
-  } catch { /* ignore */ }
+  if (allowsPreferences()) {
+    try {
+      const saved = Number(localStorage.getItem('dagonweb.inspector-width'));
+      if (saved) setInspectorWidth(saved);
+    } catch { /* ignore */ }
+  }
+
+  // ------------------------------------------------------------------ dry run
+  const dryPanel = document.getElementById('dryRunPanel');
+  const dryBody = document.getElementById('dryRunBody');
+  let playback = null;
+
+  function clearDryRun() {
+    clearTimeout(playback);
+    canvas.querySelectorAll('.task-node').forEach(node => node.classList.remove('dry-pending', 'dry-running', 'dry-done', 'dry-failed'));
+  }
+
+  function renderDryRun(result) {
+    const list = (items, cls) => items.length ? `<ul class="small ${cls}">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : '';
+    const stages = (result.stages || []).map((names, index) => `<li><strong>Stage ${index + 1}</strong>${names.length > 1 ? ' (in parallel)' : ''}: ${names.map(name => `<code>${escapeHtml(name)}</code>`).join(', ')}</li>`).join('');
+    const tasks = (result.stages || []).flat().map(name => {
+      const task = result.tasks[name] || {};
+      return `<details class="dry-task mb-2"><summary><code>${escapeHtml(name)}</code> <span class="text-body-secondary">${escapeHtml(task.label)}</span></summary>
+        <p class="small mb-1">${escapeHtml(task.would)}</p>
+        ${task.after?.length ? `<p class="small mb-1">Runs after: ${task.after.map(item => `<code>${escapeHtml(item)}</code>`).join(', ')}</p>` : ''}
+        ${task.stages_in?.length ? `<p class="small mb-1">Stages in: ${task.stages_in.map(item => `<code>${escapeHtml(item)}</code>`).join(', ')}</p>` : ''}
+        ${task.preview ? `<pre class="dry-preview small mb-0" tabindex="0" aria-label="What DAGonStar would run for ${escapeHtml(name)}">${escapeHtml(task.preview)}</pre>` : ''}
+      </details>`;
+    }).join('');
+    dryBody.innerHTML = `
+      <p class="mb-2"><span class="badge ${result.ok ? 'text-bg-success' : 'text-bg-danger'}">${result.ok ? 'Dry run passed' : 'Problems found'}</span>
+        <span class="small text-body-secondary">Nothing was executed.</span></p>
+      ${result.error ? `<p class="text-danger small">${escapeHtml(result.error)}</p>` : ''}
+      ${list(result.problems || [], 'text-danger')}
+      ${list(result.warnings || [], 'text-warning-emphasis')}
+      ${result.dagonstar ? `<p class="small">${escapeHtml(result.dagonstar)}</p>` : ''}
+      ${stages ? `<h3 class="h6">Execution plan</h3><ol class="small ps-3">${stages}</ol>` : ''}
+      ${tasks ? `<h3 class="h6">Tasks</h3>${tasks}` : ''}
+      ${guest ? '<p class="small text-body-secondary mt-3">Create an account to run workflows for real, inspect their files, and export them as Python or CWL.</p>' : ''}`;
+  }
+
+  function playDryRun(result) {
+    clearDryRun();
+    const nodeOf = name => canvas.querySelector(`.task-node[data-name="${CSS.escape(name)}"]`);
+    if (!result.ok) {
+      (result.problems || []).forEach(problem => { const name = String(problem).split(':')[0]; nodeOf(name)?.classList.add('dry-failed'); });
+      return;
+    }
+    const stages = result.stages || [];
+    stages.flat().forEach(name => nodeOf(name)?.classList.add('dry-pending'));
+    if (reducedMotion.matches) { stages.flat().forEach(name => { const node = nodeOf(name); node?.classList.remove('dry-pending'); node?.classList.add('dry-done'); }); return; }
+    let index = 0;
+    const step = () => {
+      if (index > 0) stages[index - 1].forEach(name => { const node = nodeOf(name); node?.classList.remove('dry-running'); node?.classList.add('dry-done'); });
+      if (index >= stages.length) return;
+      stages[index].forEach(name => { const node = nodeOf(name); node?.classList.remove('dry-pending'); node?.classList.add('dry-running'); });
+      index += 1;
+      playback = setTimeout(step, 650);
+    };
+    step();
+  }
+
+  async function dryRun() {
+    const task = selected && findTask(selected);
+    if (task && inspectorDirty() && !applyInspector(task)) return;
+    if (!graph.tasks.length) { setStatus('Add at least one task before running', 'error'); return; }
+    setStatus('Dry run…', 'saving');
+    dryBody.innerHTML = '<p class="text-body-secondary">Checking the workflow…</p>';
+    window.bootstrap?.Offcanvas.getOrCreateInstance(dryPanel).show();
+    let result;
+    try {
+      const response = await fetch(root.dataset.dryRunUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRFToken': root.dataset.csrf }, body: JSON.stringify(toDocument()) });
+      result = await response.json().catch(() => ({ ok: false, error: `HTTP ${response.status}` }));
+    } catch (error) {
+      result = { ok: false, error: error.message };
+    }
+    setStatus(result.ok ? 'Dry run passed' : 'Dry run found problems', result.ok ? 'saved' : 'error');
+    renderDryRun(result);
+    playDryRun(result);
+  }
+  document.getElementById('dryRunButton')?.addEventListener('click', async () => { if (editable && !(await save())) return; dryRun(); });
+  dryPanel?.addEventListener('hidden.bs.offcanvas', clearDryRun);
+
+  if (guest) {
+    document.getElementById('guestDownload').addEventListener('click', () => {
+      const blob = new Blob([JSON.stringify(toDocument(), null, 2)], { type: 'application/json' });
+      const link = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `${graph.name || 'workflow'}.json` });
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    });
+    const importInput = document.getElementById('guestImport');
+    document.getElementById('guestOpen').addEventListener('click', () => importInput.click());
+    importInput.addEventListener('change', async () => {
+      const file = importInput.files[0];
+      importInput.value = '';
+      if (!file) return;
+      try {
+        const parsed = JSON.parse(await file.text());
+        if (!parsed || typeof parsed.tasks !== 'object') throw new Error('not a DAGonStar document');
+        fromDocument(parsed);
+        render();
+        showEmptyInspector();
+        save();
+        requestAnimationFrame(() => fit(false));
+      } catch (error) {
+        setStatus(`Cannot open ${file.name}: ${error.message}`, 'error');
+      }
+    });
+    document.getElementById('guestReset').addEventListener('click', () => {
+      if (!window.confirm('Discard your changes and reload the template?')) return;
+      try { sessionStorage.removeItem(guestKey); } catch { /* ignore */ }
+      clearDryRun();
+      load();
+    });
+  }
 
   // Hooks for the workflow assistant (assistant.js).
   window.DAGonWebEditor = {

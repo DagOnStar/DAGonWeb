@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="h4">{{ run.label or 'Run ' ~ run.id }} <span id="runStatus" class="badge text-bg-secondary align-middle">{{ run.status }}</span></h1>
+    <h1 class="h4">{{ run.label or 'Run ' ~ run.id }} <span class="visually-hidden">, status:</span> <span id="runStatus" class="badge text-bg-secondary align-middle">{{ run.status }}</span></h1>
     <p class="page-subtitle small"><a href="{{ url_for('workflows.editor', workflow_id=workflow.id) }}">{{ workflow.name }}</a> · started {{ run.created_at.strftime('%Y-%m-%d %H:%M UTC') }} by {{ run.user.name }} · <span id="runElapsed"></span></p>
   </div>
   <div class="d-flex flex-wrap gap-2">
@@ -22,7 +22,7 @@
 
 <div class="card card-body py-2 mb-3">
   <div class="d-flex flex-wrap gap-3 align-items-center small">
-    <span id="runCounts" class="text-body-secondary">Waiting for workflow activity…</span>
+    <span id="runCounts" class="text-body-secondary" role="status" aria-live="polite">Waiting for workflow activity…</span>
     <div class="progress run-progress flex-grow-1" role="progressbar" aria-label="Run progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
       <div id="runProgressSuccess" class="progress-bar bg-success" style="width:0%"></div>
       <div id="runProgressFailed" class="progress-bar bg-danger" style="width:0%"></div>
@@ -63,7 +63,7 @@
     <span id="runLogHeading">Live execution log</span>
     <div class="form-check form-switch small mb-0"><input class="form-check-input" type="checkbox" role="switch" id="followLog" checked><label class="form-check-label" for="followLog">Follow</label></div>
   </div>
-  <div class="card-body p-0"><pre id="runLog" class="run-log bg-dark text-light m-0 p-3 mono small" aria-live="polite">Waiting for workflow activity…</pre></div>
+  <div class="card-body p-0"><pre id="runLog" class="run-log bg-dark text-light m-0 p-3 mono small" tabindex="0" aria-label="Run log">Waiting for workflow activity…</pre></div>
 </section>
 
 <section class="card mt-3" aria-labelledby="fairHeading">

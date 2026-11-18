@@ -15,6 +15,7 @@ Environment variables:
 | `OPENAI_API_KEY` | unset | Alias of `DAGONWEB_LLM_API_KEY`. |
 | `REDIS_URL` | unset | Alias of `DAGONWEB_REDIS_URL`. |
 | `GUNICORN_WORKERS` / `GUNICORN_THREADS` | `2` / `4` | Web server processes and threads in the container. |
+| `SESSION_COOKIE_SECURE` | `false` | Set to `true` behind HTTPS so session and remember-me cookies are sent only over TLS. |
 
 ## Administration settings
 
@@ -23,11 +24,13 @@ Settings edited in the [administration panel](administration.md) are stored in t
 | Section | Keys |
 | --- | --- |
 | Appearance | `site_name`, `tagline`, `footer_text`, `default_theme` (`auto`, `light`, `dark`), `brand_color`, `navbar_color` |
-| Authentication | `local_login_enabled`, `registration_enabled`, `registration_domains`, `sso_auto_create`, `google_enabled`, `google_client_id`, `google_client_secret`, `google_hosted_domain`, `microsoft_enabled`, `microsoft_tenant`, `microsoft_client_id`, `microsoft_client_secret`, `oidc_enabled`, `oidc_name`, `oidc_discovery_url`, `oidc_client_id`, `oidc_client_secret`, `oidc_scopes` |
+| Authentication | `local_login_enabled`, `registration_enabled`, `guest_playground_enabled`, `registration_domains`, `sso_auto_create`, `google_enabled`, `google_client_id`, `google_client_secret`, `google_hosted_domain`, `microsoft_enabled`, `microsoft_tenant`, `microsoft_client_id`, `microsoft_client_secret`, `oidc_enabled`, `oidc_name`, `oidc_discovery_url`, `oidc_client_id`, `oidc_client_secret`, `oidc_scopes` |
 | Execution | `execution_backend` (`thread` or `redis`), `redis_url`, `redis_queue`, `max_concurrent_runs`, `run_timeout_hours` |
 | Storage | `scratch_dir`, `run_retention_days`, `max_upload_mb` |
 | SMTP | `smtp_host`, `smtp_port`, `smtp_from`, `smtp_user`, `smtp_password`, `smtp_tls` |
 | LLM connector | `llm_enabled`, `llm_base_url`, `llm_api_key`, `llm_model`, `llm_temperature`, `llm_timeout`, `llm_max_steps` |
+| Privacy (GDPR) | `controller_name`, `controller_address`, `privacy_contact_email`, `dpo_email`, `supervisory_authority`, `privacy_policy_version`, `privacy_policy_extra`, `cookie_banner_enabled`, `audit_retention_days`, `inactive_account_days` |
+| Accessibility | `accessibility_contact_email`, `accessibility_enforcement`, `accessibility_statement_date` |
 
 For example `DAGONWEB_EXECUTION_BACKEND=redis`, `DAGONWEB_SMTP_HOST=smtp.example.org` or `DAGONWEB_LLM_ENABLED=true`. The scratch directory resolves from `scratch_dir`, then the `SCRATCH_DIR` environment variable. The executor rejects file browsing outside the configured scratch root.
 

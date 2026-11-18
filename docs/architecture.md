@@ -8,6 +8,8 @@ DAGonWeb is organized as a conventional Flask application:
 - `app/authz.py`: the `permission_required` / `admin_required` decorators; `app/audit.py`: the audit log; `app/branding.py`: logo and branding; `app/mail.py`: SMTP; `app/maintenance.py`: run retention.
 - `app/agents`: the LLM workflow assistant: an OpenAI-compatible client (`llm.py`), the draft-editing and dry-run tools (`tools.py`), and the agent loop (`assistant.py`).
 - `app/interactive.py`: the scripts and helpers behind the Upload, Form, Table, Chart and Download task types.
+- `app/playground.py`: the guest playground and the `/try/dry-run` endpoint.
+- `app/privacy.py`, `app/legal.py`, `app/account.py`: GDPR support (cookie inventory, data export, erasure, retention), the privacy notice, cookie policy and accessibility statement, and the self-service account page.
 - `app/pycode.py`: the Python exporter (commented program, headless ZIP bundle) and the AST-only Python/ZIP importer.
 - `app/workflows`: workflow CRUD, graph API, visual editor, run pages.
 - `app/task_specs.py`: the registry of the 14 DAGonStar task types and the 5 DAGonWeb interactive types. It defines the palette metadata, the Inspector fields and defaults, the document fields, and the `DagonTask` arguments for each type.
@@ -30,6 +32,7 @@ The front end is build-free browser JavaScript:
 - `run.js`: the live run graph and the file browser.
 - `theme.js`: the light, dark and automatic themes (default from the Appearance settings).
 - `assistant.js`: the assistant chat panel.
+- `consent.js`: the cookie banner and consent API (`window.DAGonWebConsent`); preference storage is written only with consent.
 - `service-worker.js`: served at `/service-worker.js`, so its scope covers the whole site.
 
 The editor uses Ace from a CDN for command editing. The README has diagrams of the architecture, the run lifecycle, and the data model.
