@@ -86,8 +86,9 @@ def enable_fair_if_configured(runtime: Any, workflow: Workflow, run_dir: Path) -
         access_policy=AccessPolicy(metadata=profile.get("access_policy") or "local", data=profile.get("access_policy") or "local"),
         strict=bool(profile.get("strict", False)),
         output_dir=str(safe_child(run_dir, ".dagon", "fair", workflow.name)),
-        capture_environment=bool(profile.get("capture_environment", False)),
-        environment_allowlist=profile.get("environment_allowlist") or [],
+        # DAGonStar's capture_environment is the list of variables to record;
+        # DAGonWeb stores a switch plus the allowlist, so pass the list only when on.
+        capture_environment=list(profile.get("environment_allowlist") or []) if profile.get("capture_environment") else [],
     )
     runtime.enable_fair(fair_profile)
 

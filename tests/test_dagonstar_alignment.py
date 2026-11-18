@@ -236,6 +236,41 @@ def test_failed_task_error_is_logged_and_run_resumes_from_checkpoint(app):
         assert (Path(statuses["consume"].scratch_path) / "copy.txt").read_text(encoding="utf-8") == "data\n"
 
 
+def test_fair_profile_runs_with_dagonstar(app, monkeypatch):
+    """Regression: an enabled FAIR profile must build a DAGonStar FairProfile and the run must succeed."""
+    monkeypatch.setenv("DAGONWEB_FAIR_PROBE", "recorded")
+    with app.app_context():
+        workflow = new_workflow("Fair_run", "batch")
+        workflow.fair_profile = {
+            "enabled": True, "title": "FAIR run", "creators": [{"name": "Ada Lovelace"}], "license": "Apache-2.0",
+            "keywords": ["provenance"], "access_policy": "local", "strict": False,
+            "capture_environment": True, "environment_allowlist": ["DAGONWEB_FAIR_PROBE"],
+        }
+        db.session.commit()
+        run = execute_workflow(workflow, workflow.owner_id)
+        assert run.status == "success", run.log
+        fair_root = Path(run.scratch_path) / ".dagon" / "fair" / "Fair_run"
+        assert any(path.is_file() for path in fair_root.rglob("*")), run.log
+
+
+@pytest.mark.parametrize(("capture", "expected"), [(True, ["OMP_NUM_THREADS", "PYTHONPATH"]), (False, [])])
+def test_fair_capture_environment_uses_allowlist_only_when_enabled(app, tmp_path, capture, expected):
+    from app.executor.local import enable_fair_if_configured
+
+    class Runtime:
+        profile = None
+
+        def enable_fair(self, profile):
+            self.profile = profile
+
+    with app.app_context():
+        workflow = new_workflow(f"Fair_env_{capture}")
+        workflow.fair_profile = {"enabled": True, "capture_environment": capture, "environment_allowlist": ["OMP_NUM_THREADS", "PYTHONPATH"]}
+        runtime = Runtime()
+        enable_fair_if_configured(runtime, workflow, tmp_path)
+        assert runtime.profile.capture_environment == expected
+
+
 def test_generated_python_program_runs_with_dagonstar(app, tmp_path):
     with app.app_context():
         workflow = new_workflow("Generated", "batch")
