@@ -46,7 +46,6 @@
   let zoom = 1;
   let saveTimer = null;
   let saving = Promise.resolve();
-  let aceEditors = [];
 
   // ------------------------------------------------------------------ utils
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -519,7 +518,7 @@
   }
 
   function showEmptyInspector() {
-    destroyAce();
+    destroyCodeEditors();
     const counts = graph.tasks.length
       ? `<p class="small text-body-secondary">${graph.tasks.length} task${graph.tasks.length === 1 ? '' : 's'}, ${graph.links.filter(link => link.kind === 'data').length} data link(s), ${graph.links.filter(link => link.kind === 'explicit').length} explicit dependenc${graph.links.filter(link => link.kind === 'explicit').length === 1 ? 'y' : 'ies'}.</p>`
       : '';
@@ -542,7 +541,7 @@
 
   function renderField(field, config) {
     const id = `cfg_${field.key}`;
-    const help = field.help ? `<div class="form-text">${field.help}</div>` : '';
+    const help = field.help ? `<div class="form-text" id="${id}_help">${field.help}</div>` : '';
     const value = fieldValue(field, config);
     const label = `<label class="form-label small fw-semibold mb-1" for="${id}">${escapeHtml(field.label)}</label>`;
     if (field.kind === 'checkbox') {
@@ -559,16 +558,18 @@
       return `<div class="mb-2">${label}<select class="form-select form-select-sm" id="${id}" ${disabledAttr()}>${options.map(option => `<option ${option === value ? 'selected' : ''}>${escapeHtml(option)}</option>`).join('')}</select>${help}</div>`;
     }
     if (field.kind === 'code') {
-      return `<div class="mb-2">${label}<textarea class="form-control form-control-sm mono" id="${id}" rows="8" spellcheck="false" data-mode="${field.mode || 'sh'}" ${disabledAttr()}>${escapeHtml(value)}</textarea>${help}</div>`;
+      return `<div class="mb-2">${label}<textarea class="form-control form-control-sm mono" id="${id}" rows="8" spellcheck="false" data-field="${escapeHtml(field.key)}" ${helpAttr(field, id)} ${disabledAttr()}>${escapeHtml(value)}</textarea>${help}</div>`;
     }
     if (['mapping', 'json', 'list', 'textarea'].includes(field.kind)) {
       const rows = Math.min(12, Math.max(field.kind === 'json' ? 4 : 3, String(value).split('\n').length + 1));
-      return `<div class="mb-2">${label}<textarea class="form-control form-control-sm mono" id="${id}" rows="${rows}" spellcheck="false" placeholder="${escapeHtml(field.placeholder || (field.kind === 'mapping' ? 'name = value' : ''))}" ${disabledAttr()}>${escapeHtml(value)}</textarea>${help}</div>`;
+      return `<div class="mb-2">${label}<textarea class="form-control form-control-sm mono" id="${id}" rows="${rows}" spellcheck="false" data-field="${escapeHtml(field.key)}" ${helpAttr(field, id)} placeholder="${escapeHtml(field.placeholder || (field.kind === 'mapping' ? 'name = value' : ''))}" ${disabledAttr()}>${escapeHtml(value)}</textarea>${help}</div>`;
     }
     const type = field.kind === 'integer' || field.kind === 'number' ? 'number' : field.kind === 'url' ? 'url' : 'text';
     const step = field.kind === 'number' ? 'any' : '1';
     return `<div class="mb-2">${label}<input class="form-control form-control-sm ${type === 'text' ? 'mono' : ''}" id="${id}" type="${type}" ${type === 'number' ? `step="${step}" min="0"` : ''} value="${escapeHtml(value)}" placeholder="${escapeHtml(field.placeholder || '')}" ${disabledAttr()}>${help}</div>`;
   }
+
+  const helpAttr = (field, id) => (field.help ? `aria-describedby="${id}_help"` : '');
 
   function parseMapping(text, label) {
     const result = {};
@@ -608,7 +609,7 @@
   }
 
   function showInspector(task) {
-    destroyAce();
+    destroyCodeEditors();
     const spec = specOf(task);
     const config = task.config || {};
     const basic = spec.fields.filter(field => !field.advanced);
@@ -652,54 +653,111 @@
     inspector.querySelectorAll('.reference-chip').forEach(chip => chip.addEventListener('mousedown', event => event.preventDefault()));
     inspector.querySelectorAll('.reference-chip').forEach(chip => chip.addEventListener('click', () => insertReference(chip.dataset.reference)));
     inspector.addEventListener('focusin', rememberFocus);
-    upgradeCodeFields();
+    upgradeCodeFields(task);
     inspector.dataset.snapshot = inspectorSnapshot();
   }
 
   let lastFocused = null;
   function rememberFocus(event) {
-    if (event.target.matches('textarea, input[type="text"], input:not([type])')) lastFocused = event.target;
+    if (event.target.matches('textarea:not(.dw-code-source), input[type="text"], input:not([type])') && !event.target.closest('.monaco-editor')) lastFocused = event.target;
   }
 
+  inspector.addEventListener('dagonweb:code-focus', event => { lastFocused = event.target; });
+
   function insertReference(reference) {
-    const focusedAce = aceEditors.find(item => item.editor.isFocused() || item.editor === lastFocused);
-    if (focusedAce) { focusedAce.editor.insert(reference); focusedAce.editor.focus(); return; }
+    const code = window.DAGonWebCode;
+    const handle = code?.focused() || (lastFocused?.codeEditor && inspector.contains(lastFocused) ? lastFocused.codeEditor : null);
+    if (handle) { handle.insert(reference); return; }
     const target = lastFocused && inspector.contains(lastFocused) ? lastFocused : inspector.querySelector('#cfg_command, #cfg_inputs');
     if (!target) return;
+    if (target.codeEditor) { target.codeEditor.insert(reference); return; }
     const start = target.selectionStart ?? target.value.length;
     const end = target.selectionEnd ?? target.value.length;
     target.setRangeText(reference, start, end, 'end');
     target.focus();
   }
 
-  function upgradeCodeFields() {
-    if (!window.ace) return;
-    const dark = document.documentElement.getAttribute('data-bs-theme') === 'dark';
-    inspector.querySelectorAll('textarea[data-mode]').forEach(textarea => {
-      const host = document.createElement('div');
-      host.className = `code-editor ${textarea.dataset.mode}`;
-      textarea.after(host);
-      textarea.hidden = true;
-      const editor = window.ace.edit(host);
-      editor.setTheme(dark ? 'ace/theme/tomorrow_night' : 'ace/theme/github');
-      editor.session.setMode(textarea.dataset.mode === 'python' ? 'ace/mode/python' : 'ace/mode/sh');
-      editor.setValue(textarea.value, -1);
-      editor.setOptions({ fontSize: '13px', showPrintMargin: false, wrap: true, enableKeyboardAccessibility: true, tabSize: textarea.dataset.mode === 'python' ? 4 : 2, useSoftTabs: true, readOnly: !editable });
-      editor.session.on('change', () => { textarea.value = editor.getValue(); });
-      editor.on('focus', () => { lastFocused = editor; });
-      editor.commands.addCommand({ name: 'apply', bindKey: { win: 'Ctrl-Enter', mac: 'Command-Enter' }, exec: () => applyInspector(findTask(selected)) });
-      aceEditors.push({ editor, textarea });
-    });
+  // ------------------------------------------------------------ code editors
+  const LANGUAGE = { mapping: 'dagon-mapping', list: 'dagon-list', json: 'json', textarea: 'plaintext' };
+  const stripHtml = text => String(text || '').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+
+  function fieldLanguage(field) {
+    if (field.language) return field.language;
+    if (field.kind === 'code') return field.mode === 'python' ? 'python' : 'shell';
+    return LANGUAGE[field.kind] || 'plaintext';
   }
 
-  function destroyAce() {
-    aceEditors.forEach(item => item.editor.destroy());
-    aceEditors = [];
+  /** Names declared by a mapping or JSON field currently shown in the Inspector. */
+  function liveKeys(task, key) {
+    const element = inspector.querySelector(`#cfg_${key}`);
+    const fallback = () => Object.keys((task.config || {})[key] || {});
+    if (!element) return fallback();
+    const text = element.value.trim();
+    if (!text) return [];
+    if (text.startsWith('{')) { try { return Object.keys(JSON.parse(text)); } catch { return fallback(); } }
+    return text.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#') && line.includes('=')).map(line => line.slice(0, line.indexOf('=')).trim());
+  }
+
+  /** What completion, hover and diagnostics know about the workflow around a task. */
+  function codeContext(task) {
+    return {
+      workflow: graph.name,
+      current: task?.name,
+      tasks: graph.tasks.filter(other => other !== task).map(other => ({ name: other.name, type: other.task_type, label: specOf(other).label, files: producedFiles(other) })),
+      inputs: task ? liveKeys(task, 'inputs').filter(name => INPUT_RE.test(name)) : [],
+      outputs: task ? liveKeys(task, 'outputs').filter(name => INPUT_RE.test(name)) : [],
+      function: String(task?.config?.callable || '').split(':')[1] || 'main',
+    };
+  }
+
+  /** JSON schema of one registry field, used by Monaco to validate and complete JSON. */
+  function fieldSchema(field) {
+    const schema = { title: field.label, description: stripHtml(field.help) || undefined };
+    if (field.default !== undefined && field.default !== '') schema.default = field.default;
+    switch (field.kind) {
+      case 'select': return { ...schema, type: 'string', enum: field.options || [] };
+      case 'integer': return { ...schema, type: 'integer', minimum: 0 };
+      case 'number': return { ...schema, type: 'number', minimum: 0 };
+      case 'checkbox': case 'tristate': return { ...schema, type: 'boolean' };
+      case 'mapping': return { ...schema, type: 'object', additionalProperties: { type: ['string', 'number', 'boolean'] } };
+      case 'list': return { ...schema, type: 'array', items: { type: 'string', ...(field.suggestions ? { examples: field.suggestions } : {}) } };
+      case 'json': return { ...schema, ...(field.schema || {}) };
+      case 'url': return { ...schema, type: 'string', format: 'uri' };
+      default: return { ...schema, type: 'string', ...(field.suggestions ? { examples: field.suggestions } : {}) };
+    }
+  }
+
+  function configSchema(spec) {
+    return { type: 'object', properties: Object.fromEntries(spec.fields.map(field => [field.key, fieldSchema(field)])), additionalProperties: true };
+  }
+
+  function upgradeCodeFields(task) {
+    const code = window.DAGonWebCode;
+    if (!code) return;
+    const spec = specOf(task);
+    const context = () => codeContext(task);
+    const onSubmit = () => applyInspector(findTask(selected));
+    spec.fields.forEach(field => {
+      const textarea = inspector.querySelector(`textarea#cfg_${CSS.escape(field.key)}`);
+      if (!textarea) return;
+      code.attach(textarea, {
+        language: fieldLanguage(field), field: field.key, label: field.label, context, onSubmit,
+        suggestions: field.suggestions, strictKeys: field.key === 'inputs' || field.key === 'outputs',
+        schema: field.kind === 'json' && field.schema ? field.schema : undefined,
+        minLines: field.kind === 'code' ? 8 : undefined, maxLines: field.kind === 'code' ? 30 : 16,
+      }).then(() => { if (inspector.dataset.snapshot) inspector.dataset.snapshot = inspectorSnapshot(); });
+    });
+    const raw = inspector.querySelector('#iConfig');
+    if (raw) code.attach(raw, { language: 'json', label: 'Raw configuration JSON', context, onSubmit, schema: configSchema(spec), minLines: 8, maxLines: 30 });
+  }
+
+  function destroyCodeEditors() {
+    window.DAGonWebCode?.disposeWithin(inspector);
     lastFocused = null;
   }
 
   function inspectorSnapshot() {
-    return [...inspector.querySelectorAll('input, textarea, select')].map(element => (
+    return [...inspector.querySelectorAll('input, textarea, select')].filter(element => !element.closest('.monaco-editor')).map(element => (
       element.type === 'checkbox' ? element.checked : element.multiple ? [...element.selectedOptions].map(option => option.value).join(',') : element.value
     )).join('\u0000');
   }
@@ -946,7 +1004,7 @@
   });
 
   document.addEventListener('keydown', event => {
-    const typing = event.target.closest('input, textarea, select, .ace_editor, [contenteditable]');
+    const typing = event.target.closest('input, textarea, select, .monaco-editor, [contenteditable]');
     const mod = event.ctrlKey || event.metaKey;
     if (mod && event.key.toLowerCase() === 's') {
       event.preventDefault();
@@ -1011,7 +1069,6 @@
     toggleFull.textContent = expanded ? 'Standard' : 'Expand';
     toggleFull.title = expanded ? 'Restore standard Inspector width' : 'Expand Inspector';
     toggleFull.setAttribute('aria-pressed', String(expanded));
-    aceEditors.forEach(item => item.editor.resize());
     if (!expanded) { resizeCanvas(); drawLinks(); }
   }
   function setInspectorWidth(width) {
@@ -1023,7 +1080,6 @@
     resizer.setAttribute('aria-valuemax', String(Math.round(max)));
     resizer.setAttribute('aria-valuenow', String(Math.round(value)));
     if (allowsPreferences()) { try { localStorage.setItem('dagonweb.inspector-width', String(Math.round(value))); } catch { /* ignore */ } }
-    aceEditors.forEach(item => item.editor.resize());
   }
   toggleFull.addEventListener('click', () => setExpanded(!root.classList.contains('inspector-expanded')));
   resizer.addEventListener('pointerdown', event => {
@@ -1160,6 +1216,7 @@
   window.DAGonWebEditor = {
     editable,
     getDocument: () => toDocument(),
+    codeContext: () => codeContext(selected ? findTask(selected) : null),
     async applyDocument(document) {
       if (!editable) return false;
       fromDocument({ ...document, name: graph.name, id: graph.id, dagonweb: graph.dagonweb });

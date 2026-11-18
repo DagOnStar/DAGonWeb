@@ -47,7 +47,7 @@ STORAGE_ITEMS: tuple[StorageItem, ...] = (
 
 THIRD_PARTY_ASSETS = (
     ("cdn.jsdelivr.net", "Bootstrap style sheet and scripts"),
-    ("cdnjs.cloudflare.com", "Ace code editor and Chart.js"),
+    ("cdnjs.cloudflare.com", "Monaco code editor and Chart.js"),
 )
 
 

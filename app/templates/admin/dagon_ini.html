@@ -126,11 +126,11 @@
           </div>
         </div>
       </div>
-      {{ form.content(class='form-control font-monospace dagon-ini-editor rounded-0 rounded-bottom', rows='18', spellcheck='false', autocomplete='off', autocapitalize='off', aria_describedby='dagon-ini-help dagon-ini-warning') }}
+      {{ form.content(class='form-control font-monospace dagon-ini-editor rounded-0 rounded-bottom', rows='18', spellcheck='false', autocomplete='off', autocapitalize='off', aria_describedby='dagon-ini-help dagon-ini-warning', **{'data-code-language': 'ini', 'data-code-max-lines': '40'}) }}
       {% for error in form.content.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
       <div class="d-flex flex-wrap justify-content-between gap-2 mt-2">
         <div class="text-muted small">Stored at <code>{{ path }}</code></div>
-        <div class="text-muted small">Press <kbd>Tab</kbd> to indent selected lines.</div>
+        <div class="text-muted small">Ctrl/⌘ + Space suggests sections and keys · Ctrl/⌘ + Enter saves · Ctrl+M switches <kbd>Tab</kbd> between indenting and moving focus.</div>
       </div>
     </form>
   </div>
@@ -248,23 +248,8 @@
     charCounter.textContent = String(value.length);
   }
 
-  editor.addEventListener('keydown', (event) => {
-    if (event.key !== 'Tab') return;
-    event.preventDefault();
-    const start = editor.selectionStart;
-    const end = editor.selectionEnd;
-    const value = editor.value;
-    const selected = value.slice(start, end);
-    if (start !== end && selected.includes('\n')) {
-      const lineStart = value.lastIndexOf('\n', start - 1) + 1;
-      const replacement = value.slice(lineStart, end).split('\n').map((line) => `  ${line}`).join('\n');
-      editor.setRangeText(replacement, lineStart, end, 'select');
-    } else {
-      editor.setRangeText('  ', start, end, 'end');
-    }
-    updateCounts();
-  });
-
+  // Monaco (static/js/code-editor.js) handles indentation; the textarea stays in sync
+  // and fires input events, so the guided form follows the raw INI.
   editor.addEventListener('input', updateCounts);
   editor.addEventListener('input', () => {
     if (syncing) return;

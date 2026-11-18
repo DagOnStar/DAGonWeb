@@ -14,8 +14,9 @@ All 14 DAGonStar task types are available. The palette and the Inspector forms a
 - **Name it**: task names are unique and are the identity used by DAGonStar references. They use letters, numbers, `_` and `-`.
 - **Rename it**: renaming rewrites the matching `workflow:///old/...` references and the `explicit_prevs` entries in every task.
 - **Configure it**: the Inspector shows the basic fields first. An *Advanced* section holds the rest, and a raw JSON view is available for anything else.
-  - Commands use the Ace editor with Bash highlighting.
-  - While a command editor has focus, clicking a canvas task inserts `workflow:///task/output` at the cursor.
+  - Every multi-line field uses the [Monaco editor](text_editing.md): Bash and Python scripts, JSON (validated against a schema from the task registry), `name = value` mappings, lists and `requirements.txt`.
+  - Type `workflow:///` (or press Ctrl/⌘+Space) to complete task names and then the files that task produces; unknown tasks are underlined as warnings.
+  - While a field has focus, the *Insert a producer reference* buttons insert `workflow:///task/output` at the cursor.
 - **Named inputs**: one `name = value` per line. Each name becomes a shell variable, for example `$data`, that holds the staged path. A value can be a `workflow:///task/path` reference or a plain value.
 - **Duplicate or delete** a task with the Inspector buttons or the keyboard shortcuts.
 

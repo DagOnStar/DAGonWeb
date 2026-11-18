@@ -66,7 +66,7 @@
           {% if d.kind == 'select' %}
             <select class="form-select form-select-sm {% if errors.get(d.key) %}is-invalid{% endif %}" id="{{ field_id }}" name="{{ d.key }}" {% if row.overridden %}disabled{% endif %}>{% for option, text in d.options %}<option value="{{ option }}" {% if option == value %}selected{% endif %}>{{ text }}</option>{% endfor %}</select>
           {% elif d.kind == 'textarea' %}
-            <textarea class="form-control form-control-sm {% if errors.get(d.key) %}is-invalid{% endif %}" id="{{ field_id }}" name="{{ d.key }}" rows="3" {% if row.overridden %}disabled{% endif %}>{{ value }}</textarea>
+            <textarea class="form-control form-control-sm {% if errors.get(d.key) %}is-invalid{% endif %}" id="{{ field_id }}" name="{{ d.key }}" rows="3" data-code-language="plaintext" {% if row.overridden %}disabled{% endif %}>{{ value }}</textarea>
           {% elif d.kind == 'color' %}
             <div class="d-flex gap-2"><input type="color" class="form-control form-control-color" id="{{ field_id }}" name="{{ d.key }}" value="{{ value }}" {% if row.overridden %}disabled{% endif %}><code class="align-self-center">{{ value }}</code></div>
           {% elif d.kind == 'password' %}

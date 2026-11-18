@@ -41,7 +41,7 @@ The **DAGonWeb interactive** palette category adds Upload, Form, Table, Chart an
 
 ### Batch scripts
 
-Batch tasks use the Ace Bash editor. Named inputs become shell variables, so an input `data = workflow:///extract/data.txt` can be used as `$data` in the script. While the editor has focus, clicking a canvas task inserts `workflow:///task/output` at the cursor. Replace `output` with the actual producer-relative output path when needed, for example:
+Batch tasks use the Monaco editor with Bash highlighting and completion ([Text editing](text_editing.md)). Named inputs become shell variables, so an input `data = workflow:///extract/data.txt` can be used as `$data` in the script; typing `$` suggests them. Typing `workflow:///` suggests task names and then their output files. While the editor has focus, the *Insert a producer reference* buttons insert `workflow:///task/output` at the cursor. Replace `output` with the actual producer-relative output path when needed, for example:
 
 ```bash
 cat workflow:///prepare/output/data.csv > result.csv
