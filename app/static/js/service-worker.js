@@ -1,7 +1,8 @@
 // DAGonWeb service worker: network first, cached shell as an offline fallback.
-const CACHE = 'dagonweb-v2';
+const CACHE = 'dagonweb-v3';
 const SHELL = [
   '/static/css/app.css',
+  '/static/js/code-editor.js',
   '/static/js/editor.js',
   '/static/js/run.js',
   '/static/js/theme.js',

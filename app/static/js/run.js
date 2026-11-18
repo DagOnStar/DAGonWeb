@@ -112,23 +112,28 @@
     return (geometry.coordinates || []).flat(Infinity).reduce((points, value, index, all) => (index % 2 === 0 && typeof value === 'number' ? [...points, [value, all[index + 1]]] : points), []);
   }
 
-  function pre(text) {
+  // Previews are <pre> elements that static/js/code-editor.js turns into
+  // read-only Monaco views with highlighting, folding and search.
+  function pre(text, language = 'plaintext') {
     const element = document.createElement('pre');
     element.className = 'file-preview mono small';
+    element.dataset.codeLanguage = language;
+    element.setAttribute('aria-label', 'File preview');
     element.textContent = text;
     return element;
   }
+  const languageFor = name => window.DAGonWebCode?.languageForFile(name) || 'plaintext';
 
-  function renderPreview(target, result) {
+  function renderPreview(target, result, name = '') {
     target.replaceChildren();
     const label = document.createElement('div');
     label.className = 'small text-body-secondary mb-2';
     label.textContent = { json: 'Formatted JSON', geojson: 'GeoJSON map', csv: 'CSV table', netcdf: 'NetCDF metadata', text: 'Text preview' }[result.kind] || 'File preview';
     target.append(label);
     if (result.kind === 'json') {
-      try { target.append(pre(JSON.stringify(JSON.parse(result.content), null, 2))); } catch { target.append(pre(result.content)); }
+      try { target.append(pre(JSON.stringify(JSON.parse(result.content), null, 2), 'json')); } catch { target.append(pre(result.content, languageFor(name))); }
     } else if (result.kind === 'netcdf') {
-      target.append(pre(JSON.stringify(result.metadata, null, 2)));
+      target.append(pre(JSON.stringify(result.metadata, null, 2), 'json'));
     } else if (result.kind === 'csv') {
       const wrap = document.createElement('div');
       wrap.className = 'table-responsive file-table';
@@ -160,8 +165,9 @@
       });
       target.append(map);
     } else {
-      target.append(pre(result.content));
+      target.append(pre(result.content, languageFor(name)));
     }
+    window.DAGonWebCode?.enhance(target);
   }
 
   // ---------------------------------------------------------------- inspector
@@ -169,7 +175,7 @@
     if (!task) return;
     currentPath = path;
     const response = await fetch(taskUrl(layout.dataset.filesUrl, task.id, path));
-    const log = task.log ? `<pre class="file-preview mono small mb-3" style="max-height:10rem">${escapeHtml(task.log)}</pre>` : '';
+    const log = task.log ? `<pre class="file-preview mono small mb-3" style="max-height:10rem" data-code-language="dagon-log" data-code-max-lines="10" aria-label="Task log">${escapeHtml(task.log)}</pre>` : '';
     if (!response.ok) {
       inspector.innerHTML = `<h2 class="h6">${escapeHtml(task.name)} <span class="badge ${BADGE[task.status] || 'text-bg-secondary'}">${escapeHtml(task.status)}</span></h2>${log}<p class="text-body-secondary">Scratch files are not available yet.</p>`;
       return;
@@ -188,6 +194,7 @@
           <span>${file.is_dir ? '📁' : '📄'} ${escapeHtml(file.name)}</span><span class="small text-body-secondary">${file.is_dir ? '' : formatSize(file.size)}</span></button>`).join('') || '<div class="list-group-item text-body-secondary">No files.</div>'}
       </div>
       <div id="filePreview" aria-live="polite" class="small text-body-secondary">Select a file to preview it.</div>`;
+    window.DAGonWebCode?.enhance(inspector);
     inspector.querySelectorAll('[data-crumb]').forEach(link => link.addEventListener('click', event => { event.preventDefault(); inspect(task, link.dataset.crumb); }));
     inspector.querySelectorAll('[data-name]').forEach(button => button.addEventListener('click', async () => {
       const next = path ? `${path}/${button.dataset.name}` : button.dataset.name;
@@ -196,7 +203,7 @@
       target.textContent = 'Loading…';
       const preview = await fetch(taskUrl(layout.dataset.fileUrl, task.id, next));
       const result = await preview.json().catch(() => ({ error: 'Unable to preview file.' }));
-      if (preview.ok) renderPreview(target, result); else target.textContent = result.error || 'Unable to preview file.';
+      if (preview.ok) renderPreview(target, result, button.dataset.name); else target.textContent = result.error || 'Unable to preview file.';
       const download = document.createElement('a');
       download.className = 'btn btn-sm btn-outline-primary mt-2';
       download.textContent = `Download ${button.dataset.name}`;
@@ -212,9 +219,22 @@
   }
 
   // ---------------------------------------------------------------- polling
+  // The live log becomes a read-only Monaco view (log highlighting, search with
+  // Ctrl/⌘+F); the <pre> stays as the fallback when Monaco is unavailable.
+  let logView = null;
+  window.DAGonWebCode?.view(runLog, { language: 'dagon-log', label: 'Run log', minLines: 12, maxLines: 24 }).then(view => {
+    logView = view;
+    if (view) { view.setValue(lastLog || 'Waiting for workflow activity…'); if (follow.checked) view.revealEnd(); }
+  });
+
   function renderLog(text) {
     if (text === lastLog) return;
     lastLog = text;
+    if (logView) {
+      logView.setValue(text || 'Waiting for workflow activity…');
+      if (follow.checked) logView.revealEnd();
+      return;
+    }
     runLog.innerHTML = escapeHtml(text || 'Waiting for workflow activity…')
       .replace(/^(.*(?:failed|error).*)$/gim, '<span class="log-error">$1</span>')
       .replace(/^(.*(?:completed with status: success|completed\.).*)$/gim, '<span class="log-ok">$1</span>');
@@ -288,7 +308,7 @@
       return `<div class="mb-2">${label}<select class="form-select form-select-sm" id="${id}" name="${escapeHtml(field.name)}" ${required}>${options}</select>${help}</div>`;
     }
     if (field.type === 'textarea') {
-      return `<div class="mb-2">${label}<textarea class="form-control form-control-sm" id="${id}" name="${escapeHtml(field.name)}" rows="3" ${required}>${value}</textarea>${help}</div>`;
+      return `<div class="mb-2">${label}<textarea class="form-control form-control-sm" id="${id}" name="${escapeHtml(field.name)}" rows="3" data-code-language="plaintext" ${required}>${value}</textarea>${help}</div>`;
     }
     const type = { number: 'number', integer: 'number', date: 'date', email: 'email' }[field.type] || 'text';
     const step = field.type === 'number' ? 'step="any"' : field.type === 'integer' ? 'step="1"' : '';
@@ -314,6 +334,7 @@
           <div class="d-flex align-items-center gap-2 mt-2"><button class="btn btn-primary btn-sm">${item.kind === 'upload' ? 'Upload and continue' : 'Submit and continue'}</button><span class="small text-danger" role="alert" data-error></span></div>
         </div>
       </form>`).join('');
+    window.DAGonWebCode?.enhance(interactionsBox);
     interactionsBox.querySelectorAll('form').forEach(form => form.addEventListener('submit', async event => {
       event.preventDefault();
       const error = form.querySelector('[data-error]');
@@ -432,7 +453,7 @@
     const current = document.getElementById('runDetailsColumn').getBoundingClientRect().width;
     setDetailsWidth(current + (event.key === 'ArrowLeft' ? 24 : -24));
   });
-  follow.addEventListener('change', () => { if (follow.checked) runLog.scrollTop = runLog.scrollHeight; });
+  follow.addEventListener('change', () => { if (follow.checked) { runLog.scrollTop = runLog.scrollHeight; logView?.revealEnd(); } });
   window.addEventListener('resize', draw);
 
   draw();

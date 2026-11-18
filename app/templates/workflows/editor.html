@@ -157,8 +157,8 @@
     <div id="assistantDraft" class="assistant-draft" hidden></div>
     <form id="assistantForm" class="d-flex flex-column gap-2">
       <label class="visually-hidden" for="assistantInput">Message the assistant</label>
-      <textarea id="assistantInput" class="form-control" rows="3" placeholder="{{ 'e.g. Ask the user for a CSV, clean it with pandas, then show a table and a bar chart of the mean per column' if assistant_enabled else 'The assistant is not configured' }}" {% if not assistant_enabled %}disabled{% endif %}></textarea>
-      <div class="d-flex justify-content-between align-items-center"><span class="small text-body-secondary">Ctrl/⌘ + Enter to send</span><button class="btn btn-primary btn-sm" id="assistantSend" {% if not assistant_enabled %}disabled{% endif %}>Send</button></div>
+      <textarea id="assistantInput" class="form-control" rows="3" aria-describedby="assistantInputHelp" data-code-language="markdown" placeholder="{{ 'e.g. Ask the user for a CSV, clean it with pandas, then show a table and a bar chart of the mean per column' if assistant_enabled else 'The assistant is not configured' }}" {% if not assistant_enabled %}disabled{% endif %}></textarea>
+      <div class="d-flex justify-content-between align-items-center"><span class="small text-body-secondary" id="assistantInputHelp">Ctrl/⌘ + Enter to send · Ctrl/⌘ + Space suggests task names</span><button class="btn btn-primary btn-sm" id="assistantSend" {% if not assistant_enabled %}disabled{% endif %}>Send</button></div>
     </form>
   </div>
 </div>
@@ -166,7 +166,6 @@
 <script type="application/json" id="taskSpecs">{{ palette|tojson }}</script>
 {% endblock %}
 {% block scripts %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.36.5/ace.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script src="{{ url_for('static', filename='js/editor.js') }}"></script>
 <script src="{{ url_for('static', filename='js/assistant.js') }}"></script>
 {% endblock %}

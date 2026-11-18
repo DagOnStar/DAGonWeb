@@ -28,6 +28,7 @@ The database stores workflows as relational rows:
 
 The front end is build-free browser JavaScript:
 
+- `code-editor.js`: upgrades every multi-line text field (`textarea[data-code-language]`, read-only `pre[data-code-language]`) to the Monaco editor and adds the DAGonWeb languages, completion, hover and diagnostics (`window.DAGonWebCode`). See [Text editing](text_editing.md).
 - `editor.js`: the canvas and the Inspector.
 - `run.js`: the live run graph and the file browser.
 - `theme.js`: the light, dark and automatic themes (default from the Appearance settings).
@@ -35,4 +36,4 @@ The front end is build-free browser JavaScript:
 - `consent.js`: the cookie banner and consent API (`window.DAGonWebConsent`); preference storage is written only with consent.
 - `service-worker.js`: served at `/service-worker.js`, so its scope covers the whole site.
 
-The editor uses Ace from a CDN for command editing. The README has diagrams of the architecture, the run lifecycle, and the data model.
+Monaco 0.52.2 is loaded on demand from cdnjs; if it cannot be loaded the plain textareas keep working. The README has diagrams of the architecture, the run lifecycle, and the data model.

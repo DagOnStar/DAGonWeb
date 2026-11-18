@@ -162,9 +162,17 @@ body { background: var(--bs-tertiary-bg); }
 .inspector-resizer { position: absolute; left: -.7rem; top: 0; width: .9rem; height: 100%; cursor: col-resize; touch-action: none; z-index: 2; }
 .inspector-resizer:focus-visible { outline: 2px solid var(--dw-brand); outline-offset: -3px; }
 .inspector-section { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--bs-secondary-color); margin: 1rem 0 .4rem; }
-.code-editor { height: 240px; width: 100%; border: 1px solid var(--bs-border-color); border-radius: .375rem; }
-.code-editor.python { height: 340px; }
-#editor.inspector-expanded .code-editor { height: 52vh; }
+/* ---------------------------------------------------------------- Monaco text fields (static/js/code-editor.js) */
+/* The original textarea stays in the form, visually hidden, and holds the text. */
+.dw-code-source { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; resize: none; }
+.dw-code { position: relative; width: 100%; min-width: 0; max-width: 100%; min-height: 2.5rem; overflow: hidden; border: 1px solid var(--bs-border-color); border-radius: var(--bs-border-radius); background: var(--bs-body-bg); }
+.dw-code:focus-within { border-color: #86b7fe; box-shadow: 0 0 0 .25rem rgba(13, 110, 253, .25); }
+.dw-code.is-invalid { border-color: var(--bs-form-invalid-border-color); }
+.dw-code-view { margin-bottom: .5rem; }
+.card-body.p-0 > .dw-code-view { margin: 0; border: 0; border-radius: 0; }
+.dagon-ini-panel .dw-code { border-radius: 0 0 var(--bs-border-radius) var(--bs-border-radius); }
+.dw-code-ref { text-decoration: underline dotted; text-underline-offset: 2px; }
+#editor.inspector-expanded .dw-code:not(.dw-code-prose) { min-height: 12rem; }
 .reference-chip { cursor: pointer; }
 
 /* Admin dagon.ini console */

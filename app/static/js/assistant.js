@@ -107,6 +107,14 @@
     }
   }
 
+  // Monaco (static/js/code-editor.js): Markdown highlighting, task-name and
+  // workflow:/// completion from the open workflow, Ctrl/⌘+Enter to send.
+  window.DAGonWebCode?.attach(input, {
+    language: 'markdown', label: 'Message the assistant', minLines: 3, maxLines: 10,
+    onSubmit: () => send(input.value),
+    context: () => window.DAGonWebEditor?.codeContext?.(),
+    suggestions: ['Explain', 'Add a task that', 'Run after', 'Fix the last run', 'Add a table and a chart of'],
+  });
   form.addEventListener('submit', event => { event.preventDefault(); send(input.value); });
   input.addEventListener('keydown', event => {
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); send(input.value); }

@@ -20,7 +20,7 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Any
 
-from .interactive import interactive_command
+from .interactive import FORM_FIELD_TYPES, interactive_command
 
 WORKFLOW_REFERENCE = re.compile(
     r"workflow://(?P<workflow>[A-Za-z0-9_-]{0,80})/(?P<task>[A-Za-z0-9_-]{1,80})/(?P<path>[^\s;|&<>()]+)"
@@ -81,7 +81,63 @@ class TaskSpec:
 
 
 def _f(key: str, label: str, kind: str = "text", **extra: Any) -> dict[str, Any]:
+    """One Inspector field.
+
+    Optional editor hints (used by the Monaco editor in the browser):
+    ``language`` overrides the editor language, ``suggestions`` lists completion
+    items (mapping keys, list values) and ``schema`` is the JSON schema of a
+    ``json`` field.
+    """
     return {"key": key, "label": label, "kind": kind, **extra}
+
+
+SBATCH_SUGGESTIONS = [
+    "--gres=gpu:1", "--time=01:00:00", "--mem=4G", "--cpus-per-task=4", "--account=", "--qos=",
+    "--constraint=", "--exclusive", "--mail-type=END", "--output=slurm-%j.out",
+]
+HTTP_HEADER_SUGGESTIONS = ["Accept", "Accept-Language", "Cache-Control", "Content-Type", "If-None-Match", "User-Agent"]
+ENVIRONMENT_SUGGESTIONS = ["LANG", "OMP_NUM_THREADS", "PYTHONPATH", "PYTHONUNBUFFERED", "TZ"]
+FORM_FIELDS_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+            "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "Variable name in form.json and form.env."},
+            "label": {"type": "string", "description": "Label shown on the run page."},
+            "type": {"enum": list(FORM_FIELD_TYPES), "default": "text"},
+            "default": {"description": "Initial value."},
+            "required": {"type": "boolean"},
+            "options": {"type": "array", "description": "Choices of a select field."},
+            "help": {"type": "string", "description": "Help text under the field."},
+        },
+    },
+}
+LLM_PROMPT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["messages"],
+    "properties": {
+        "messages": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["role", "content"],
+                "properties": {"role": {"enum": ["system", "user", "assistant", "tool"]}, "content": {"type": "string", "description": "Use {name} placeholders for prompt parameters and staged inputs."}},
+            },
+        },
+        "model": {"type": "string"},
+        "temperature": {"type": "number", "minimum": 0, "maximum": 2},
+        "max_tokens": {"type": "integer", "minimum": 1},
+        "top_p": {"type": "number", "minimum": 0, "maximum": 1},
+        "response_format": {"type": "object"},
+    },
+}
+HTTP_STATUS_SCHEMA: dict[str, Any] = {
+    "oneOf": [
+        {"type": "integer", "minimum": 100, "maximum": 599},
+        {"type": "array", "items": {"type": "integer", "minimum": 100, "maximum": 599}},
+    ],
+}
 
 
 INPUTS_FIELD = _f(
@@ -144,7 +200,7 @@ TASK_SPECS: dict[str, TaskSpec] = {
                 _f("ntasks_per_node", "Tasks per node", "integer", advanced=True),
                 _f("memory", "Memory (MB)", "integer"),
                 _f("nodelist", "Node list", advanced=True),
-                _f("sbatch_options", "Extra sbatch options", "list", advanced=True, help="One option per line, for example <code>--gres=gpu:1</code>."),
+                _f("sbatch_options", "Extra sbatch options", "list", advanced=True, suggestions=SBATCH_SUGGESTIONS, help="One option per line, for example <code>--gres=gpu:1</code>."),
                 _f("comment", "Job comment", advanced=True),
                 PRE_STAGE_FIELD,
             ],
@@ -299,10 +355,10 @@ TASK_SPECS: dict[str, TaskSpec] = {
                 _f("url", "URL", "url"),
                 _f("method", "Method", "select", options=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]),
                 _f("query", "Query parameters", "mapping"),
-                _f("headers", "Request headers", "mapping", help="Do not put secrets here."),
+                _f("headers", "Request headers", "mapping", suggestions=HTTP_HEADER_SUGGESTIONS, help="Do not put secrets here."),
                 _f("json", "JSON request body", "json"),
-                _f("expected_status", "Expected status", "json", placeholder="200 or [200, 201]"),
-                _f("outputs", "Response outputs", "mapping", help="<code>body</code>, <code>headers</code> or <code>metadata</code> = relative path."),
+                _f("expected_status", "Expected status", "json", placeholder="200 or [200, 201]", schema=HTTP_STATUS_SCHEMA),
+                _f("outputs", "Response outputs", "mapping", suggestions=["body", "headers", "metadata"], help="<code>body</code>, <code>headers</code> or <code>metadata</code> = relative path."),
                 _f("timeout", "Timeout (s)", "number", advanced=True),
                 _f("retries", "Retries", "integer", advanced=True),
             ],
@@ -363,10 +419,10 @@ TASK_SPECS: dict[str, TaskSpec] = {
                 _f("inputs", "Function inputs", "mapping", help="name = scalar, local file, or <code>workflow:///task/path</code>."),
                 _f("outputs", "Declared outputs", "mapping", help="parameter = relative path below <code>outputs/</code>."),
                 _f("executor", "Executor", "select", options=["local", "slurm"]),
-                _f("requirements", "requirements.txt", "textarea", advanced=True, help="Installed in a task-local virtualenv (local executor only)."),
+                _f("requirements", "requirements.txt", "textarea", advanced=True, language="pip-requirements", help="Installed in a task-local virtualenv (local executor only)."),
                 _f("resources", "Scheduler resources", "mapping", advanced=True),
                 _f("python", "Python interpreter", advanced=True),
-                _f("environment", "Environment variables", "mapping", advanced=True, help="Do not put secrets here."),
+                _f("environment", "Environment variables", "mapping", advanced=True, suggestions=ENVIRONMENT_SUGGESTIONS, help="Do not put secrets here."),
             ],
         ),
         TaskSpec(
@@ -386,7 +442,7 @@ TASK_SPECS: dict[str, TaskSpec] = {
             },
             [
                 _f("provider", "Provider", help="Credentials belong in the <code>[llm.&lt;provider&gt;]</code> section of <code>dagon.ini</code>."),
-                _f("prompt", "Request JSON", "json", help="Object with a <code>messages</code> array; put <code>model</code> and options here. Use <code>{name}</code> placeholders."),
+                _f("prompt", "Request JSON", "json", schema=LLM_PROMPT_SCHEMA, help="Object with a <code>messages</code> array; put <code>model</code> and options here. Use <code>{name}</code> placeholders."),
                 _f("params", "Prompt parameters", "mapping"),
                 _f("input_files", "Staged inputs", "mapping", help="placeholder = <code>workflow:///task/path</code>."),
                 _f("output_file", "Response file"),
@@ -471,7 +527,7 @@ TASK_SPECS: dict[str, TaskSpec] = {
             },
             [
                 _f("description", "Instructions", "textarea"),
-                _f("fields", "Form fields (JSON list)", "json", help="Each field: <code>name</code>, <code>label</code>, <code>type</code> (text, textarea, number, integer, boolean, select, date, email), <code>default</code>, <code>required</code>, <code>options</code>."),
+                _f("fields", "Form fields (JSON list)", "json", schema=FORM_FIELDS_SCHEMA, help="Each field: <code>name</code>, <code>label</code>, <code>type</code> (text, textarea, number, integer, boolean, select, date, email), <code>default</code>, <code>required</code>, <code>options</code>."),
                 _f("timeout_minutes", "Wait at most (minutes)", "integer", advanced=True),
             ],
             docs="DAGonWeb extension: outputs/form.json (values) and outputs/form.env (export NAME=value).",

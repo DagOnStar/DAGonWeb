@@ -44,7 +44,7 @@ See `/cookies` for the generated cookie policy. DAGonWeb sets only first-party c
 
 The banner offers **Accept all**, **Necessary only** (equally prominent) and **Customize**; the choice can be changed at any time from **Cookie settings** in the footer. Without JavaScript no optional storage is used.
 
-Bootstrap, Ace and Chart.js are loaded from public CDNs (`cdn.jsdelivr.net`, `cdnjs.cloudflare.com`). They set no cookies but receive visitors' IP addresses; the notice discloses this. To avoid it, serve these files from your own host.
+Bootstrap, the Monaco editor and Chart.js are loaded from public CDNs (`cdn.jsdelivr.net`, `cdnjs.cloudflare.com`). They set no cookies but receive visitors' IP addresses; the notice discloses this. To avoid it, serve these files from your own host.
 
 ## Your responsibilities as controller
 

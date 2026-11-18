@@ -36,6 +36,7 @@ The project targets **DAGonStar 2.9.4** (pinned in [requirements.txt](requiremen
 - **Template gallery.** There is one runnable template per task type. They are also exported as [examples/](examples).
 - **Interface.**
   - Light, dark and automatic themes.
+  - The Monaco editor for every multi-line text field, with syntax highlighting and context-aware completion: `workflow:///` references, shell `$inputs`, Python, JSON schemas from the task registry, and `dagon.ini` sections and keys ([docs](docs/text_editing.md)).
   - Keyboard shortcuts.
   - Debounced autosave with a status indicator.
   - Zoom and fit controls.

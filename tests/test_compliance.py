@@ -403,3 +403,64 @@ def test_pages_pass_static_accessibility_checks(app):
         response = client.get(path)
         assert response.status_code == 200, path
         assert_accessible(response.get_data(as_text=True), path)
+
+
+class _TextFieldParser(HTMLParser):
+    """Collects every <textarea> and <script src> of a page."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.textareas: list[dict] = []
+        self.scripts: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag == "textarea":
+            self.textareas.append(attributes)
+        elif tag == "script" and attributes.get("src"):
+            self.scripts.append(attributes["src"])
+
+
+def test_every_text_field_uses_the_monaco_editor(app):
+    """Multi-line text fields are upgraded to Monaco by static/js/code-editor.js."""
+    from app.task_specs import palette
+
+    static = Path(app.static_folder)
+    source = (static / "js" / "code-editor.js").read_text(encoding="utf-8")
+    languages = set(json.loads(source.split("const LANGUAGES = ", 1)[1].split(";", 1)[0].replace("'", '"')))
+    assert {"shell", "python", "json", "ini", "markdown", "plaintext", "dagon-mapping", "dagon-list", "pip-requirements", "dagon-log"} <= languages
+    assert "/static/js/code-editor.js" in (static / "js" / "service-worker.js").read_text(encoding="utf-8")
+    for path in [*static.rglob("*.js"), *Path(app.template_folder).rglob("*.html")]:
+        assert "ace.min.js" not in path.read_text(encoding="utf-8"), f"{path}: the Ace editor was replaced by Monaco"
+
+    client = login(app)
+    with app.app_context():
+        admin = User.query.filter_by(email="admin@example.org").one()
+        workflow = Workflow(owner_id=admin.id, name="monaco")
+        db.session.add(workflow)
+        db.session.flush()
+        apply_workflow_template(workflow, "agentic")
+        db.session.commit()
+        pages = [*ADMIN_PAGES, f"/workflows/{workflow.id}/editor", f"/workflows/{workflow.id}/setup", f"/workflows/{workflow.id}/edit-meta", "/workflows/new"]
+    seen = 0
+    for path in pages:
+        response = client.get(path)
+        assert response.status_code == 200, path
+        parser = _TextFieldParser()
+        parser.feed(response.get_data(as_text=True))
+        assert any(src.endswith("/static/js/code-editor.js") for src in parser.scripts), f"{path}: code-editor.js is not loaded"
+        for textarea in parser.textareas:
+            seen += 1
+            assert textarea.get("data-code-language") in languages, f"{path}: textarea without a Monaco language: {textarea}"
+    assert seen >= 4
+
+    # Inspector fields: registry editor hints must name a known language and carry a JSON schema object.
+    for group in palette():
+        for spec in group["types"]:
+            for field in spec["fields"]:
+                if "language" in field:
+                    assert field["language"] in languages, (spec["type"], field["key"])
+                if "schema" in field:
+                    assert field["kind"] == "json" and isinstance(field["schema"], dict), (spec["type"], field["key"])
+                if "suggestions" in field:
+                    assert all(isinstance(item, str) for item in field["suggestions"]), (spec["type"], field["key"])
