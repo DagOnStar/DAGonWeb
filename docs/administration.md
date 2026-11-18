@@ -10,9 +10,11 @@ Administrators open the panel from the navbar (**Admin**). The sidebar has these
 | **Execution** | The run dispatcher (in-process threads or a Redis queue), concurrency, the run timeout, and the back-ends found on the host (Docker, kubectl, sbatch, Apptainer, Nomad). |
 | **Storage** | The scratch root, disk usage, run retention and clean-up, and the upload size limit. |
 | **SMTP** | Outgoing mail for registration links, with a **Send test email** button. |
+| **Privacy (GDPR)** | Data controller and contacts, supervisory authority, privacy notice version and text, cookie banner, audit log retention, inactive-account report. See [privacy_gdpr.md](privacy_gdpr.md). |
+| **Accessibility** | Feedback contact, enforcement procedure and review date for the accessibility statement. See [accessibility.md](accessibility.md). |
 | **LLM connector** | The OpenAI-compatible endpoint used by the workflow assistant, with a **Test connection** button. |
 | **dagon.ini** | The global DAGonStar configuration (guided form and raw view). |
-| **Users** | Create, edit, search, disable and delete accounts; assign roles; unlink an SSO identity. |
+| **Users** | Create, edit, search, disable and delete accounts; assign roles; unlink an SSO identity; export a user's data or erase the account for GDPR requests. |
 | **Roles** | Create roles and choose their permissions. |
 | **Audit log** | Sign-ins, failed sign-ins, user/role/settings changes, imports and runs, with filters and CSV export. |
 
@@ -35,6 +37,7 @@ The built-in `admin` role has every permission and cannot be deleted; the built-
 ## Authentication
 
 - **Local accounts.** Email and password, with self-registration through an emailed link (valid 24 hours). Turn off **Allow email and password sign-in** to make SSO the only option; administrators can always sign in locally, so you cannot lock yourself out.
+- **Guest access.** With **Let visitors try DAGonWeb without an account** (on by default), anonymous visitors land on the [guest playground](playground.md) and can dry-run workflows.
 - **Allowed email domains** limit both self-registration and SSO sign-ups, for example `uniparthenope.it, example.org`.
 - **Google** (including Google Workspace for Education, optionally restricted to a hosted domain), **Microsoft Entra ID** (`organizations` accepts any work or school account; use your tenant ID to restrict it) and **generic OpenID Connect** (Keycloak, SATOSA/eduGAIN proxies, Okta, Auth0…).
 
@@ -46,5 +49,6 @@ Upload PNG, JPEG, WebP, GIF or SVG files up to 512 KB. Files are checked by sign
 
 ## Maintenance
 
-- `flask --app wsgi cleanup-runs [--days N]` deletes finished runs older than the retention period (run it from cron). **Storage → Clean up now** does the same from the panel.
+- `flask --app wsgi cleanup-runs [--days N]` applies the retention periods (run it daily from cron): finished runs, audit log entries, used or expired registration links, and a list of inactive accounts. **Storage → Clean up now** deletes old runs from the panel.
+- Brand and navbar colors are rejected when white text on them would fall below a 4.5:1 contrast ratio (WCAG 2.1 AA).
 - `flask --app wsgi worker` starts a Redis run worker (see [deployment.md](deployment.md)).

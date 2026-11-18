@@ -126,7 +126,7 @@ def test_registration_requires_email_verification_link():
 
     complete = client.post(
         "/register/complete",
-        data={"token": token, "password": "longpassword", "confirm": "longpassword"},
+        data={"token": token, "password": "longpassword", "confirm": "longpassword", "accept_privacy": "y"},
     )
 
     assert complete.status_code == 302

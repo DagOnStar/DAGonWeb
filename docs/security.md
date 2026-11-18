@@ -12,7 +12,10 @@ Important safeguards included:
 - Uploaded logos are checked by signature, SVGs with scripts are rejected, and the logo is served with a sandboxing Content-Security-Policy.
 - Python and ZIP imports are parsed with `ast` and never executed; ZIP entries are checked for path traversal, size and count. Exported bundles strip secret-looking `dagon.ini` values.
 - Interactive uploads are size-limited, file names are sanitised, and files are written only into the run's directory under the scratch root.
-- An audit log records sign-ins (including failures), administration changes, imports and runs.
+- An audit log records sign-ins (including failures), administration changes, imports and runs; it has its own retention period.
+- Guest dry runs never execute commands, never import Native task code, and never write to the database or the scratch directory; documents are limited to 512 KB and 60 tasks.
+- Responses carry `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: SAMEORIGIN` and a restrictive `Permissions-Policy`. Cookies are HttpOnly and SameSite=Lax; set `SESSION_COOKIE_SECURE=true` behind HTTPS. “Remember me” lasts 30 days.
+- Account erasure removes workflows, runs and scratch files, and detaches audit entries (no user link, email or IP). See [privacy_gdpr.md](privacy_gdpr.md).
 - Ownership checks for workflow editing.
 - Task-run scratch browsing, preview, file downloads, and ZIP archives are restricted to the authorized task scratch root. File names are escaped before they are rendered.
 - Every run, its task directories, its checkpoint, and CWL exports live under the configured scratch root. The executor always overrides `[batch] scratch_dir_base` and `remove_dir`, even when a per-workflow `dagon.ini` sets them.

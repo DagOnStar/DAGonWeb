@@ -13,8 +13,8 @@
       <td>{% for role in user.roles %}<span class="badge {{ 'text-bg-danger' if role.name == 'admin' else 'text-bg-secondary' }} me-1">{{ role.name }}</span>{% endfor %}</td>
       <td class="small text-nowrap">{{ user.last_login_at.strftime('%Y-%m-%d %H:%M') if user.last_login_at else 'never' }}</td>
       <td>{% if user.active %}<span class="badge text-bg-success">active</span>{% else %}<span class="badge text-bg-secondary">disabled</span>{% endif %}</td>
-      <td class="text-end text-nowrap"><a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin.user_edit', user_id=user.id) }}">Edit</a>
-        {% if user.id != current_user.id %}<form method="post" action="{{ url_for('admin.user_delete', user_id=user.id) }}" class="d-inline" onsubmit="return confirm('Delete {{ user.email }}?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-danger">Delete</button></form>{% endif %}</td>
+      <td class="text-end text-nowrap"><a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin.user_edit', user_id=user.id) }}">Edit<span class="visually-hidden"> {{ user.email }}</span></a>
+        {% if user.id != current_user.id %}<form method="post" action="{{ url_for('admin.user_delete', user_id=user.id) }}" class="d-inline" data-confirm="Delete {{ user.email }}?" onsubmit="return confirm(this.dataset.confirm);"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-sm btn-outline-danger">Delete<span class="visually-hidden"> {{ user.email }}</span></button></form>{% endif %}</td>
     </tr>
   {% else %}<tr><td colspan="6" class="text-body-secondary">No users match.</td></tr>{% endfor %}
   </tbody></table></div></div>

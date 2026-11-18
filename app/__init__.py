@@ -6,7 +6,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import click
-from flask import Flask, abort, redirect, send_file, send_from_directory, url_for
+from flask import Flask, abort, jsonify, redirect, request, send_file, send_from_directory, url_for
 from flask_login import current_user
 from .config import Config
 from .dagon_ini import DEFAULT_DAGON_INI
@@ -35,11 +35,50 @@ def create_app(config_object: type[Config] = Config) -> Flask:
     from .admin.routes import bp as admin_bp
     from .workflows.routes import bp as workflows_bp
     from .agents.routes import bp as assistant_bp
+    from .account import bp as account_bp
+    from .legal import bp as legal_bp
+    from .playground import bp as playground_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_bp, url_prefix="/admin")
     app.register_blueprint(workflows_bp, url_prefix="/workflows")
     app.register_blueprint(assistant_bp, url_prefix="/assistant")
+    app.register_blueprint(account_bp, url_prefix="/account")
+    app.register_blueprint(legal_bp)
+    app.register_blueprint(playground_bp, url_prefix="/try")
+
+    # Endpoints a signed-in user can reach before accepting a new privacy notice.
+    consent_exempt = {"auth.logout", "service_worker", "branding_logo", "static"}
+
+    @app.before_request
+    def require_privacy_acceptance():
+        if not app.config.get("PRIVACY_ACCEPTANCE_REQUIRED", True) or not current_user.is_authenticated:
+            return None
+        endpoint = request.endpoint or ""
+        if endpoint in consent_exempt or endpoint.startswith(("legal.", "account.")):
+            return None
+        from . import privacy
+
+        try:
+            pending = privacy.needs_acceptance(current_user)
+        except Exception:  # database not migrated yet
+            db.session.rollback()
+            return None
+        if not pending:
+            return None
+        if request.method == "GET" and request.accept_mimetypes.accept_html:
+            return redirect(url_for("legal.accept", next=request.full_path.rstrip("?")))
+        if request.method == "GET":
+            return None  # background JSON polling keeps working
+        return jsonify({"error": "Please read and accept the updated privacy notice first."}), 428
+
+    @app.after_request
+    def security_headers(response):
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=(), interest-cohort=()")
+        return response
 
     @app.errorhandler(403)
     def forbidden(_error):
@@ -68,7 +107,14 @@ def create_app(config_object: type[Config] = Config) -> Flask:
     def index():
         if current_user.is_authenticated:
             return redirect(url_for("workflows.list_workflows"))
-        return redirect(url_for("auth.login"))
+        from . import settings as site_settings
+
+        try:
+            playground = site_settings.get("guest_playground_enabled")
+        except Exception:
+            db.session.rollback()
+            playground = False
+        return redirect(url_for("playground.index") if playground else url_for("auth.login"))
 
     @app.route("/service-worker.js")
     def service_worker():
@@ -92,7 +138,15 @@ def create_app(config_object: type[Config] = Config) -> Flask:
         except Exception:  # database not migrated yet
             db.session.rollback()
             values = {"site_name": "DAGonWeb", "tagline": "", "footer_text": "", "default_theme": "auto", "brand_color": "#2457d6", "navbar_color": "#0f1b33", "logo_url": url_for("static", filename="icons/icon.svg")}
-        return {"dagonstar_version": dagonstar_version, "branding": values}
+        from . import privacy
+        from . import settings as site_settings
+
+        try:
+            extra = {"guest_playground": bool(site_settings.get("guest_playground_enabled")), "cookie_banner": bool(site_settings.get("cookie_banner_enabled"))}
+        except Exception:
+            db.session.rollback()
+            extra = {"guest_playground": False, "cookie_banner": True}
+        return {"dagonstar_version": dagonstar_version, "branding": values, "cookie_categories": privacy.COOKIE_CATEGORIES, **extra}
 
     @app.cli.command("worker")
     @click.option("--burst", is_flag=True, help="Exit when the queue is empty.")
@@ -112,15 +166,22 @@ def create_app(config_object: type[Config] = Config) -> Flask:
     @app.cli.command("cleanup-runs")
     @click.option("--days", type=int, default=None, help="Override the configured retention period.")
     def cleanup_runs_command(days: int | None) -> None:
-        """Delete finished runs older than the retention period."""
-        from . import settings
+        """Apply the retention periods: runs, audit log, registration links."""
+        from . import privacy, settings
         from .maintenance import cleanup_runs
 
         retention = days if days is not None else int(settings.get("run_retention_days") or 0)
         if retention <= 0:
             print("Run retention is disabled (0 days).")
-            return
-        print(f"Removed {cleanup_runs(retention)} run(s) older than {retention} days.")
+        else:
+            print(f"Removed {cleanup_runs(retention)} run(s) older than {retention} days.")
+        audit_days = int(settings.get("audit_retention_days") or 0)
+        if audit_days > 0:
+            print(f"Removed {privacy.purge_audit_log(audit_days)} audit log entr(ies) older than {audit_days} days.")
+        print(f"Removed {privacy.purge_registration_tokens()} used or expired registration link(s).")
+        inactive_days = int(settings.get("inactive_account_days") or 0)
+        for user in privacy.inactive_accounts(inactive_days):
+            print(f"Inactive for more than {inactive_days} days: user #{user.id} ({user.email})")
 
     @app.cli.command("seed")
     def seed() -> None:

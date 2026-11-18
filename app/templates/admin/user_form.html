@@ -1,14 +1,13 @@
-{% extends 'admin/_layout.html' %}
+{% extends 'admin/_layout.html' %}{% from '_forms.html' import field, error_summary %}
 {% block admin_content %}
 <h1 class="h3 mb-3">{{ title }}</h1>
 <form method="post" class="card col-xl-8" novalidate>
   <div class="card-body">
     {{ form.hidden_tag() }}
-    {% for field in [form.name, form.email, form.password] %}
-      <div class="mb-3">{{ field.label(class='form-label') }}{{ field(class='form-control' ~ (' is-invalid' if field.errors else ''), autocomplete=('new-password' if field.name == 'password' else 'off')) }}
-        {% for error in field.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
-        {% if field.name == 'password' and user %}<div class="form-text">Leave empty to keep the current password.</div>{% endif %}</div>
-    {% endfor %}
+    {{ error_summary([form]) }}
+    {{ field(form.name) }}
+    {{ field(form.email) }}
+    {{ field(form.password, help=('Leave empty to keep the current password.' if user else 'At least 10 characters.')) }}
     <fieldset class="mb-3"><legend class="form-label fs-6">Roles</legend><div class="checkbox-list">{{ form.roles(class='list-unstyled mb-0') }}</div></fieldset>
     <div class="form-check form-switch mb-3">{{ form.active(class='form-check-input', role='switch') }}{{ form.active.label(class='form-check-label') }}</div>
     {% if user and user.external_id %}
@@ -18,4 +17,20 @@
   </div>
   <div class="card-footer d-flex gap-2">{{ form.submit(class='btn btn-primary') }}<a class="btn btn-outline-secondary" href="{{ url_for('admin.users') }}">Cancel</a></div>
 </form>
+{% if user %}
+<section class="card col-xl-8 mt-3" aria-labelledby="gdprTitle"><div class="card-body">
+  <h2 class="h5" id="gdprTitle">Personal data (GDPR requests)</h2>
+  <p class="small">Answer an access or portability request with the user's data export. Erasure deletes the account, its workflows, its runs and their files; audit entries stay for their retention period, detached from the person.</p>
+  <div class="d-flex flex-wrap gap-2 align-items-start">
+    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('admin.user_export', user_id=user.id) }}" download>Export data (JSON)</a>
+    {% if user.id != current_user.id %}
+    <form method="post" action="{{ url_for('admin.user_erase', user_id=user.id) }}" class="d-flex flex-wrap gap-2 align-items-center">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-check mb-0"><input class="form-check-input" type="checkbox" name="confirm" value="1" id="eraseConfirm" required><label class="form-check-label small" for="eraseConfirm">I understand this cannot be undone</label></div>
+      <button class="btn btn-sm btn-danger">Erase account and data</button>
+    </form>
+    {% endif %}
+  </div>
+</div></section>
+{% endif %}
 {% endblock %}

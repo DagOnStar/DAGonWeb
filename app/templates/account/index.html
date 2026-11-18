@@ -1,0 +1,60 @@
+{% extends 'base.html' %}{% from '_forms.html' import field, error_summary %}
+{% block title %}Your account - {{ branding.site_name }}{% endblock %}
+{% block content %}
+<div class="page-header mb-3"><div><h1 class="h4">Your account</h1><p class="page-subtitle small mb-0">Profile, password and your personal data.</p></div></div>
+{{ error_summary([profile, password_form, delete_form]) }}
+<div class="row g-3">
+  <div class="col-lg-6">
+    <section class="card h-100" aria-labelledby="profileTitle"><div class="card-body">
+      <h2 class="h5" id="profileTitle">Profile</h2>
+      <dl class="row small mb-3">
+        <dt class="col-sm-4">Email</dt><dd class="col-sm-8">{{ current_user.email }}</dd>
+        <dt class="col-sm-4">Sign-in</dt><dd class="col-sm-8">{{ 'Email and password' if local else 'Single sign-on (' ~ current_user.auth_provider ~ ')' }}</dd>
+        <dt class="col-sm-4">Roles</dt><dd class="col-sm-8">{{ current_user.roles|map(attribute='name')|join(', ') or '—' }}</dd>
+        <dt class="col-sm-4">Privacy notice</dt><dd class="col-sm-8">{% if current_user.privacy_accepted_at %}Version {{ current_user.privacy_version }}, read {{ current_user.privacy_accepted_at.strftime('%Y-%m-%d') }}{% else %}Not yet confirmed{% endif %} · <a href="{{ url_for('legal.privacy_notice') }}">read it</a></dd>
+      </dl>
+      <form method="post" action="{{ url_for('account.update_profile') }}" novalidate>
+        {{ profile.hidden_tag() }}
+        {{ field(profile.name) }}
+        {{ profile.submit(class='btn btn-primary btn-sm') }}
+      </form>
+    </div></section>
+  </div>
+  <div class="col-lg-6">
+    <section class="card h-100" aria-labelledby="passwordTitle"><div class="card-body">
+      <h2 class="h5" id="passwordTitle">Password</h2>
+      {% if local %}
+      <form method="post" action="{{ url_for('account.change_password') }}" novalidate>
+        {{ password_form.hidden_tag() }}
+        {{ field(password_form.current) }}
+        {{ field(password_form.password, help='At least 10 characters.') }}
+        {{ field(password_form.confirm) }}
+        {{ password_form.submit(class='btn btn-primary btn-sm') }}
+      </form>
+      {% else %}
+      <p class="small mb-0">You sign in with single sign-on, so your password is managed by your identity provider.</p>
+      {% endif %}
+    </div></section>
+  </div>
+  <div class="col-lg-6">
+    <section class="card h-100" aria-labelledby="dataTitle"><div class="card-body">
+      <h2 class="h5" id="dataTitle">Your data</h2>
+      <p class="small">You own {{ stats.workflows }} workflow{{ '' if stats.workflows == 1 else 's' }} and started {{ stats.runs }} run{{ '' if stats.runs == 1 else 's' }}. Download everything we store about you (account, workflows, run logs, audit entries) as JSON.</p>
+      <a class="btn btn-outline-primary btn-sm" href="{{ url_for('account.export') }}" download>Download my data (JSON)</a>
+      <p class="small mt-3 mb-0">Cookie choices: <button type="button" class="btn btn-link btn-sm p-0 align-baseline" data-bs-toggle="modal" data-bs-target="#cookieSettings">cookie settings</button>. More in the <a href="{{ url_for('legal.privacy_notice') }}">privacy notice</a>.</p>
+    </div></section>
+  </div>
+  <div class="col-lg-6">
+    <section class="card h-100 border-danger-subtle" aria-labelledby="deleteTitle"><div class="card-body">
+      <h2 class="h5" id="deleteTitle">Delete your account</h2>
+      <p class="small">This permanently deletes your account, your workflows, your runs and their files. It cannot be undone. Audit entries are kept for their retention period without your name, email or IP address.</p>
+      <form method="post" action="{{ url_for('account.delete') }}" novalidate>
+        {{ delete_form.hidden_tag() }}
+        {{ field(delete_form.confirm_email, help='Enter ' ~ current_user.email ~ '.') }}
+        {% if local %}{{ field(delete_form.password) }}{% endif %}
+        {{ delete_form.submit(class='btn btn-danger btn-sm') }}
+      </form>
+    </div></section>
+  </div>
+</div>
+{% endblock %}

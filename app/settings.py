@@ -54,6 +54,8 @@ SECTIONS: list[tuple[str, str, str]] = [
     ("storage", "Storage", "Scratch directory, retention and upload limits."),
     ("smtp", "Email (SMTP)", "Outgoing mail for registration links and notifications."),
     ("llm", "LLM connector", "OpenAI-compatible endpoint used by the agentic workflow assistant."),
+    ("privacy", "Privacy (GDPR)", "Data controller, privacy notice, cookie banner and data retention."),
+    ("accessibility", "Accessibility", "Accessibility statement and feedback contact."),
 ]
 SECTION_KEYS = {key for key, _, _ in SECTIONS}
 
@@ -63,12 +65,13 @@ _DEFS: list[SettingDef] = [
     SettingDef("tagline", "Tagline", "appearance", default="Design, run and inspect DAGonStar workflows."),
     SettingDef("footer_text", "Footer text", "appearance", default="", help="Optional institutional footer, shown next to the runtime version."),
     SettingDef("default_theme", "Default theme", "appearance", "select", "auto", options=(("auto", "Follow the device"), ("light", "Light"), ("dark", "Dark")), help="Users can still pick their own theme."),
-    SettingDef("brand_color", "Brand color", "appearance", "color", "#2457d6"),
-    SettingDef("navbar_color", "Navigation bar color", "appearance", "color", "#0f1b33"),
+    SettingDef("brand_color", "Brand color", "appearance", "color", "#2457d6", help="Used for buttons with white text, so it needs a contrast ratio of at least 4.5:1 against white (WCAG 2.1 AA).", attrs={"contrast_with": "#ffffff"}),
+    SettingDef("navbar_color", "Navigation bar color", "appearance", "color", "#0f1b33", help="Shown behind white text; needs a contrast ratio of at least 4.5:1 against white.", attrs={"contrast_with": "#ffffff"}),
     # Authentication
     SettingDef("local_login_enabled", "Allow email and password sign-in", "authentication", "bool", True, group="Local accounts", help="Administrators can always sign in locally."),
     SettingDef("registration_enabled", "Allow self-registration", "authentication", "bool", True, group="Local accounts"),
     SettingDef("registration_domains", "Allowed email domains", "authentication", default="", group="Local accounts", help="Comma-separated, for example <code>uniparthenope.it, example.org</code>. Empty allows any domain. Also applies to SSO sign-ups."),
+    SettingDef("guest_playground_enabled", "Let visitors try DAGonWeb without an account", "authentication", "bool", True, group="Guest access", help="Visitors can open the templates, edit workflows in their browser and dry-run them. Nothing is executed and nothing is stored on the server."),
     SettingDef("sso_auto_create", "Create accounts on first SSO sign-in", "authentication", "bool", True, group="Single sign-on"),
     SettingDef("google_enabled", "Enable Google", "authentication", "bool", False, group="Google"),
     SettingDef("google_client_id", "Client ID", "authentication", group="Google"),
@@ -109,6 +112,21 @@ _DEFS: list[SettingDef] = [
     SettingDef("llm_temperature", "Temperature", "llm", "number", 0.2, minimum=0, maximum=2),
     SettingDef("llm_timeout", "Request timeout (seconds)", "llm", "int", 60, minimum=5, maximum=600),
     SettingDef("llm_max_steps", "Maximum agent steps per message", "llm", "int", 8, minimum=1, maximum=30, help="Each step is one model call; tools run between steps."),
+    # Privacy (GDPR)
+    SettingDef("controller_name", "Data controller", "privacy", default="", group="Data controller", help="Organization responsible for the processing, for example your university. Empty uses the site name."),
+    SettingDef("controller_address", "Postal address", "privacy", "textarea", "", group="Data controller"),
+    SettingDef("privacy_contact_email", "Privacy contact email", "privacy", "email", "", group="Data controller", help="Where users send data protection requests."),
+    SettingDef("dpo_email", "Data protection officer email", "privacy", "email", "", group="Data controller", help="Optional; required for public bodies (GDPR Art. 37)."),
+    SettingDef("supervisory_authority", "Supervisory authority", "privacy", default="", group="Data controller", help="Where users can lodge a complaint, for example <code>Garante per la protezione dei dati personali (www.garanteprivacy.it)</code>."),
+    SettingDef("privacy_policy_version", "Privacy notice version", "privacy", default="1", group="Privacy notice", help="Change it when the notice changes materially: signed-in users are asked to read and accept the new version."),
+    SettingDef("privacy_policy_extra", "Additional privacy notice text", "privacy", "textarea", "", group="Privacy notice", help="Shown at the end of the privacy notice (plain text)."),
+    SettingDef("cookie_banner_enabled", "Show the cookie banner", "privacy", "bool", True, group="Cookies"),
+    SettingDef("audit_retention_days", "Delete audit log entries after (days)", "privacy", "int", 365, minimum=0, maximum=3650, group="Retention", help="0 keeps them forever. Applied by <code>flask --app wsgi cleanup-runs</code>."),
+    SettingDef("inactive_account_days", "Report accounts inactive for (days)", "privacy", "int", 0, minimum=0, maximum=3650, group="Retention", help="0 disables it. <code>flask --app wsgi cleanup-runs</code> lists them so administrators can contact or remove them."),
+    # Accessibility
+    SettingDef("accessibility_contact_email", "Accessibility feedback email", "accessibility", "email", "", help="Where users report accessibility problems. Empty uses the privacy contact."),
+    SettingDef("accessibility_enforcement", "Enforcement procedure", "accessibility", "textarea", "", help="Who users can turn to if the answer is unsatisfactory, for example <code>AgID – https://form.agid.gov.it</code> in Italy."),
+    SettingDef("accessibility_statement_date", "Statement last reviewed", "accessibility", default="", help="Date of the last review, for example 2026-11-18."),
 ]
 DEFINITIONS: dict[str, SettingDef] = {definition.key: definition for definition in _DEFS}
 ENV_ALIASES = {"llm_api_key": "OPENAI_API_KEY", "redis_url": "REDIS_URL"}
@@ -198,7 +216,12 @@ def validate(definition: SettingDef, raw: str | None) -> Any:
     if definition.kind == "color":
         if not HEX_COLOR.match(value):
             raise ValueError(f"{definition.label} must be a #rrggbb color.")
+        against = definition.attrs.get("contrast_with")
+        if against and contrast_ratio(value, against) < 4.5:
+            raise ValueError(f"{definition.label} has a contrast ratio of {contrast_ratio(value, against):.1f}:1 against {against}; WCAG 2.1 AA needs at least 4.5:1. Choose a darker color.")
         return value.lower()
+    if definition.kind == "email" and value and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", value):
+        raise ValueError(f"{definition.label} must be an email address.")
     if definition.kind == "select" and value not in {key for key, _ in definition.options}:
         raise ValueError(f"{definition.label} has an unknown value.")
     if definition.kind == "url" and value and not re.match(r"^(https?|rediss?|unix)://", value):
@@ -229,3 +252,15 @@ def domain_allowed(email: str) -> bool:
         return True
     domain = email.rsplit("@", 1)[-1].lower()
     return any(domain == allowed or domain.endswith("." + allowed) for allowed in domains)
+
+
+def _luminance(color: str) -> float:
+    channels = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def contrast_ratio(first: str, second: str) -> float:
+    """WCAG 2.1 contrast ratio between two #rrggbb colors."""
+    light, dark = sorted((_luminance(first), _luminance(second)), reverse=True)
+    return (light + 0.05) / (dark + 0.05)

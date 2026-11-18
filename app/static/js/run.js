@@ -233,7 +233,9 @@
     document.getElementById('runProgressFailed').style.width = `${percent(failed)}%`;
     document.getElementById('runProgressRunning').style.width = `${percent(running)}%`;
     document.querySelector('.run-progress').setAttribute('aria-valuenow', String(Math.round(percent(done + failed))));
-    document.getElementById('runCounts').textContent = `${done}/${total} completed · ${running} running · ${failed} failed`;
+    const counts = `${done}/${total} completed · ${running} running · ${failed} failed`;
+    const countsEl = document.getElementById('runCounts');
+    if (countsEl.textContent !== counts) countsEl.textContent = counts;
     const end = ACTIVE.has(data.status) ? Date.now() : Date.parse(data.updated_at);
     document.getElementById('runElapsed').textContent = `${ACTIVE.has(data.status) ? 'running for' : 'took'} ${duration(end - Date.parse(data.created_at))}`;
   }
@@ -384,11 +386,20 @@
       } else if (item.kind === 'table') {
         const columns = item.data.columns || [];
         const rows = item.data.rows || [];
-        section.innerHTML = `<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-1"><h3 class="h6 mb-0">${escapeHtml(title)}</h3><span class="small text-body-secondary">${rows.length} row(s) · <a href="${escapeHtml(item.csv_url)}">CSV</a></span></div>
-          <div class="result-table border rounded"><table class="table table-sm table-striped mb-0 small"><thead><tr>${columns.map(column => `<th scope="col">${escapeHtml(column)}</th>`).join('')}</tr></thead>
+        section.innerHTML = `<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-1"><h3 class="h6 mb-0">${escapeHtml(title)}</h3><span class="small text-body-secondary">${rows.length} row(s) · <a href="${escapeHtml(item.csv_url)}">CSV<span class="visually-hidden"> of ${escapeHtml(title)}</span></a></span></div>
+          <div class="result-table border rounded" tabindex="0" role="region" aria-label="${escapeHtml(title)}"><table class="table table-sm table-striped mb-0 small"><caption class="visually-hidden">${escapeHtml(title)}</caption><thead><tr>${columns.map(column => `<th scope="col">${escapeHtml(column)}</th>`).join('')}</tr></thead>
           <tbody>${rows.slice(0, 500).map(row => `<tr>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
       } else if (item.kind === 'chart') {
-        section.innerHTML = `<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-1"><h3 class="h6 mb-0">${escapeHtml(title)}</h3><a class="small" href="${escapeHtml(item.svg_url)}">SVG</a></div><div class="result-chart"><canvas role="img" aria-label="${escapeHtml(title)}"></canvas></div>`;
+        const spec = item.data || {};
+        const series = spec.series || [];
+        const labels = spec.labels || [];
+        const summary = `${spec.type || 'chart'} chart of ${series.map(entry => entry.name).join(', ') || 'values'} by ${spec.x || 'label'}, ${labels.length} point(s)`;
+        // Text alternative (WCAG 1.1.1): the same values as a data table.
+        const table = `<details class="chart-data mt-2"><summary>Data table for “${escapeHtml(title)}”</summary><div class="result-table border rounded mt-1"><table class="table table-sm mb-0 small">
+          <caption class="visually-hidden">${escapeHtml(title)}</caption>
+          <thead><tr><th scope="col">${escapeHtml(spec.x || 'label')}</th>${series.map(entry => `<th scope="col">${escapeHtml(entry.name)}</th>`).join('')}</tr></thead>
+          <tbody>${labels.slice(0, 500).map((label, index) => `<tr><th scope="row">${escapeHtml(label)}</th>${series.map(entry => `<td>${escapeHtml(entry.values?.[index])}</td>`).join('')}</tr>`).join('')}</tbody></table></div></details>`;
+        section.innerHTML = `<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-1"><h3 class="h6 mb-0">${escapeHtml(title)}</h3><a class="small" href="${escapeHtml(item.svg_url)}">SVG<span class="visually-hidden"> of ${escapeHtml(title)}</span></a></div><div class="result-chart"><canvas role="img" aria-label="${escapeHtml(`${title}: ${summary}. The data table below lists the values.`)}"></canvas></div>${table}`;
         body.append(section);
         if (!drawChart(section.querySelector('canvas'), item.data)) section.querySelector('.result-chart').textContent = 'Chart library unavailable; download the SVG instead.';
         return;
@@ -403,9 +414,9 @@
     const maximum = Math.max(280, layout.clientWidth - 320);
     const next = Math.round(Math.min(Math.max(width, 280), maximum));
     layout.style.gridTemplateColumns = `minmax(320px,1fr) ${next}px`;
-    try { localStorage.setItem('dagonweb.run-details-width', String(next)); } catch { /* ignore */ }
+    if (window.DAGonWebConsent?.allows('preferences')) { try { localStorage.setItem('dagonweb.run-details-width', String(next)); } catch { /* ignore */ } }
   }
-  try { const saved = Number(localStorage.getItem('dagonweb.run-details-width')); if (saved) setDetailsWidth(saved); } catch { /* ignore */ }
+  if (window.DAGonWebConsent?.allows('preferences')) { try { const saved = Number(localStorage.getItem('dagonweb.run-details-width')); if (saved) setDetailsWidth(saved); } catch { /* ignore */ } }
   detailsResizer.addEventListener('pointerdown', event => {
     event.preventDefault();
     detailsResizer.setPointerCapture(event.pointerId);

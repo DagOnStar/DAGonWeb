@@ -418,6 +418,42 @@ def user_new():
     return render_template("admin/user_form.html", form=form, title="New user")
 
 
+@bp.get("/users/<int:user_id>/export")
+@admin_required
+def user_export(user_id: int):
+    """Answer a GDPR access or portability request for a user."""
+    from .. import privacy
+
+    user = db.get_or_404(User, user_id)
+    audit.record("admin.user_export", user.email)
+    db.session.commit()
+    return Response(privacy.export_json(user), mimetype="application/json", headers={"Content-Disposition": f"attachment; filename=dagonweb-personal-data-user-{user.id}.json"})
+
+
+@bp.post("/users/<int:user_id>/erase")
+@admin_required
+def user_erase(user_id: int):
+    """Answer a GDPR erasure request: delete the account and everything it owns."""
+    from .. import privacy
+
+    user = db.get_or_404(User, user_id)
+    if user.id == current_user.id:
+        flash("Use your account page to delete your own account.", "warning")
+        return redirect(url_for("admin.user_edit", user_id=user.id))
+    if request.form.get("confirm") != "1":
+        flash("Confirm the erasure first.", "warning")
+        return redirect(url_for("admin.user_edit", user_id=user.id))
+    try:
+        privacy.erase_user(user, by=f"administrator #{current_user.id}")
+    except privacy.ErasureRefused as exc:
+        db.session.rollback()
+        flash(str(exc), "warning")
+        return redirect(url_for("admin.user_edit", user_id=user.id))
+    db.session.commit()
+    flash("The account and its data were erased.", "success")
+    return redirect(url_for("admin.users"))
+
+
 @bp.route("/users/<int:user_id>/edit", methods=["GET", "POST"])
 @admin_required
 def user_edit(user_id: int):
@@ -457,7 +493,7 @@ def user_delete(user_id: int):
     if user.id == current_user.id:
         flash("You cannot delete your own account.", "warning")
     elif Workflow.query.filter_by(owner_id=user.id).count() or WorkflowRun.query.filter_by(user_id=user.id).count():
-        flash("This user owns workflows or runs. Disable the account instead, or delete their workflows first.", "warning")
+        flash("This user owns workflows or runs. Disable the account, or use “Erase account and data” on the user's page.", "warning")
     else:
         audit.record("admin.user_delete", user.email)
         db.session.delete(user)

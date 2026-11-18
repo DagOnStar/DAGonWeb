@@ -1,5 +1,9 @@
 # DAGonWeb user manual
 
+## Without an account
+
+Visitors who are not signed in can open **Try it**, pick a template, edit it, and press **Dry run** to see how DAGonStar would execute it. Nothing runs and nothing is stored on the server; see [Guest playground](playground.md).
+
 ## Workflows
 
 Create a workflow from the Workflows page in one of three ways:
@@ -68,6 +72,10 @@ The **Setup** page holds:
 - The raw per-workflow `dagon.ini`. Sections you add there, such as agent profiles, are preserved.
 
 When a task finishes, click its graph node to inspect its scratch directory. You can browse subdirectories, preview text, JSON, CSV, GeoJSON and NetCDF files, download individual files, or download all task artifacts as a ZIP archive. The browser cannot navigate outside that task’s scratch directory.
+
+## Your account and your data
+
+Click your name in the navigation bar to open **Your account**: change your display name and password, **download your data** (JSON), or **delete your account** with all your workflows, runs and files. **Cookie settings** in the page footer changes your cookie choice at any time. See the privacy notice (`/privacy`) for details.
 
 ## Permissions and safety
 

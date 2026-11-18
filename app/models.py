@@ -101,6 +101,9 @@ class User(UserMixin, TimestampMixin, db.Model):
     auth_provider = db.Column(db.String(40), default="local", nullable=False, server_default="local")
     external_id = db.Column(db.String(255), index=True)
     last_login_at = db.Column(db.DateTime)
+    # GDPR: the privacy notice version the user accepted, and when.
+    privacy_version = db.Column(db.String(40))
+    privacy_accepted_at = db.Column(db.DateTime)
     roles = db.relationship("Role", secondary=user_roles, lazy="joined", backref=db.backref("users", lazy="dynamic"))
 
     def set_password(self, password: str) -> None:

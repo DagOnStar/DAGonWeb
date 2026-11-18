@@ -224,8 +224,13 @@ def remove_task(draft: Draft, name: str = "", **_: Any) -> dict[str, Any]:
     return result
 
 
-def validate_workflow(draft: Draft, **_: Any) -> dict[str, Any]:
-    """Dry run: graph checks, DAGonStar task construction and syntax checks."""
+def validate_workflow(draft: Draft, import_native: bool = True, **_: Any) -> dict[str, Any]:
+    """Dry run: graph checks, DAGonStar task construction and syntax checks.
+
+    Building the DAGonStar workflow imports Native task callables. Guests
+    (``import_native=False``) never import code, so workflows with Native
+    tasks skip that step.
+    """
     from flask import current_app
 
     from ..executor.local import build_runtime_workflow, native_modules_importable, scratch_root
@@ -261,7 +266,10 @@ def validate_workflow(draft: Draft, **_: Any) -> dict[str, Any]:
             problems.append(f"{task['name']}: set inputs.source to a workflow:///task/file reference.")
         if task_type in ("upload", "form"):
             warnings.append(f"{task['name']} waits for user input on the run page.")
-    if not problems:
+    has_native = any(task["task_type"] == "native" for task in draft.tasks)
+    if not problems and has_native and not import_native:
+        warnings.append("Native tasks are not imported in a guest dry run; DAGonStar construction was skipped.")
+    elif not problems:
         workflow = SimpleNamespace(
             id=f"assistant-{draft.workflow_id or 0}",
             name=draft.name,

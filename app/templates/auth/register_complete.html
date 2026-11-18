@@ -1,14 +1,18 @@
-{% extends 'base.html' %}{% block title %}Complete Registration - DAGonWeb{% endblock %}{% block content %}
-<div class="row justify-content-center"><div class="col-md-5"><div class="card"><div class="card-body">
+{% extends 'base.html' %}{% from '_forms.html' import field, error_summary %}
+{% block title %}Complete registration - {{ branding.site_name }}{% endblock %}{% block content %}
+<div class="row justify-content-center"><div class="col-sm-10 col-md-6 col-lg-5"><div class="card"><div class="card-body">
 <h1 class="h4">Complete registration</h1>
-<form method="post">
+{{ error_summary([form]) }}
+<form method="post" novalidate>
   {{ form.hidden_tag() }}
   <div class="mb-3">
-    <label class="form-label">Email</label>
-    <input class="form-control" value="{{ email }}" disabled>
+    <label class="form-label" for="registrationEmail">Email</label>
+    <input class="form-control" id="registrationEmail" value="{{ email }}" disabled>
   </div>
-  <div class="mb-3">{{ form.password.label(class='form-label') }}{{ form.password(class='form-control') }}{% for error in form.password.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div>
-  <div class="mb-3">{{ form.confirm.label(class='form-label') }}{{ form.confirm(class='form-control') }}{% for error in form.confirm.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div>
+  {{ field(form.name, help='Shown to other users and in the audit log. Optional; defaults to your email address.') }}
+  {{ field(form.password, help='At least 10 characters.') }}
+  {{ field(form.confirm) }}
+  {% call field(form.accept_privacy) %} (<a href="{{ url_for('legal.privacy_notice') }}" target="_blank" rel="noopener">read it<span class="visually-hidden"> (opens in a new tab)</span></a>){% endcall %}
   {{ form.submit(class='btn btn-primary') }}
 </form>
 </div></div></div></div>{% endblock %}

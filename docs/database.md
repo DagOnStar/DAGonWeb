@@ -22,6 +22,8 @@ Tables: `users`, `roles`, `user_roles`, `settings`, `audit_logs`, `workflows`, `
 
 Migration `a9b8c7d6e5f4` adds `roles.permissions_json`, the SSO identity columns of `users` (`auth_provider`, `external_id`, `last_login_at`) and the `audit_logs` table. CI applies every migration to SQLite and PostgreSQL and checks that the models and migrations agree (`flask --app wsgi db check`).
 
+Migration `b1c2d3e4f5a6` adds `users.privacy_version` and `users.privacy_accepted_at`, which record the privacy notice a user accepted.
+
 Use PostgreSQL or MySQL with the Redis execution backend: several worker processes write to the database at once.
 
 Flask-Migrate/Alembic commands:
