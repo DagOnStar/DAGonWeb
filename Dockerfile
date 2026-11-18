@@ -12,4 +12,4 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY . /app
 RUN mkdir -p /app/instance /scratch/dagonweb && chmod -R 775 /scratch/dagonweb /app/instance
 EXPOSE 8000
-ENTRYPOINT ["/app/deployments/entrypoint.sh"]
+ENTRYPOINT ["sh", "/app/deployments/entrypoint.sh"]
