@@ -104,6 +104,7 @@ def start_thread(app: Flask, workflow_id: int, run_id: int, resume: bool = False
 
 def run_job(workflow_id: int, run_id: int, resume: bool = False) -> None:
     """Execute one run inside an application context (thread or worker)."""
+    from .. import hpc
     from ..models import Workflow
     from .local import execute_workflow
 
@@ -111,7 +112,15 @@ def run_job(workflow_id: int, run_id: int, resume: bool = False) -> None:
         workflow = db.session.get(Workflow, workflow_id)
         workflow_run = db.session.get(WorkflowRun, run_id)
         if workflow and workflow_run:
-            execute_workflow(workflow, workflow_run.user_id, workflow_run, resume=resume)
+            if workflow_run.unix_username:
+                from .remote import execute_remote
+
+                execute_remote(workflow, workflow_run, resume=resume)
+            elif hpc.enabled():
+                # With cluster execution on, nothing may run as the container user.
+                raise RuntimeError("cluster execution is enabled, so runs must execute as a linked cluster account.")
+            else:
+                execute_workflow(workflow, workflow_run.user_id, workflow_run, resume=resume)
     except Exception as exc:
         db.session.rollback()
         workflow_run = db.session.get(WorkflowRun, run_id)

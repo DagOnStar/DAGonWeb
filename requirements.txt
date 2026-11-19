@@ -14,5 +14,6 @@ netCDF4==1.7.2
 dagonstar[docker,kubernetes] @ git+https://github.com/DagOnStar/dagonstar.git@a7e633feab5c28ec8624a16f1c95e5499ddc93d4
 email-validator==2.2.0
 requests==2.32.3
+paramiko==3.4.1
 redis==5.2.1
 rq==2.1.0

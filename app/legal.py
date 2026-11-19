@@ -27,6 +27,7 @@ def _context() -> dict:
         "smtp_enabled": bool(settings.get("smtp_host")),
         "redis_enabled": settings.get("execution_backend") == "redis",
         "run_retention": int(settings.get("run_retention_days") or 0),
+        "hpc_enabled": bool(settings.get("hpc_enabled")),
         "audit_retention": int(settings.get("audit_retention_days") or 0),
         "playground": bool(settings.get("guest_playground_enabled")),
         "storage_items": privacy.STORAGE_ITEMS,

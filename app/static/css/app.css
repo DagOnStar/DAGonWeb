@@ -280,3 +280,7 @@ body:has(.cookie-banner:not([hidden])) { padding-bottom: 9rem; }
 /* Keep visually hidden (absolutely positioned) text inside scrolling tables, so it
    cannot widen the page at phone width. */
 .table-responsive, .result-table { position: relative; }
+
+/* Account page: the authorized_keys line wraps instead of widening the page. */
+.cluster-key { white-space: pre-wrap; word-break: break-all; background: var(--bs-tertiary-bg); color: var(--bs-body-color); font-size: .8rem; }
+.cluster-key code { color: inherit; }

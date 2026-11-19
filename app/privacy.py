@@ -106,6 +106,12 @@ def export_user_data(user: User) -> dict[str, Any]:
             "last_login_at": _iso(user.last_login_at),
             "privacy_version": user.privacy_version,
             "privacy_accepted_at": _iso(user.privacy_accepted_at),
+            # The private key is never exported: it is a credential, not data about the user.
+            "cluster_account": {
+                "unix_username": user.unix_username,
+                "public_key": user.unix_public_key,
+                "linked_at": _iso(user.unix_linked_at),
+            } if user.unix_username else None,
         },
         "workflows": [
             {"id": workflow.id, "name": workflow.name, "description": workflow.description, "is_public": workflow.is_public,
@@ -114,7 +120,7 @@ def export_user_data(user: User) -> dict[str, Any]:
         ],
         "runs": [
             {"id": run.id, "workflow_id": run.workflow_id, "label": run.label, "status": run.status,
-             "created_at": _iso(run.created_at), "updated_at": _iso(run.updated_at), "log": run.log or "",
+             "created_at": _iso(run.created_at), "updated_at": _iso(run.updated_at), "log": run.log or "", "cluster_account": run.unix_username,
              "tasks": [{"name": task.task_uid, "status": task.status, "log": task.log or ""} for task in run.task_runs]}
             for run in runs
         ],

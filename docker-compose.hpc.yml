@@ -1,0 +1,15 @@
+# HPC login node: runs execute over SSH as each user's own Unix account.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.hpc.yml up --build -d
+#
+# Install hpc/dagonweb_runner.py as /opt/dagonweb/bin/dagonweb-runner on the
+# login node first, and put HPC_KEY_SECRET (a Fernet key) in .env. Then set the
+# login node's host key in Administration -> HPC cluster. See docs/hpc.md.
+services:
+  dagonweb:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      HPC_KEY_SECRET: ${HPC_KEY_SECRET:?Set HPC_KEY_SECRET in .env (see docs/hpc.md)}
+      DAGONWEB_HPC_ENABLED: "true"
+      DAGONWEB_HPC_SSH_HOST: ${DAGONWEB_HPC_SSH_HOST:-host.docker.internal}

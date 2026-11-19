@@ -59,6 +59,14 @@ export DAGONWEB_EXECUTION_BACKEND=redis REDIS_URL=redis://localhost:6379/0
 flask --app wsgi worker            # add --burst to exit when the queue is empty
 ```
 
+## HPC login node (runs as each user's Unix account)
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.hpc.yml up --build -d
+```
+
+Every run executes over SSH as the submitter's own cluster account through `dagonweb-runner`; nothing runs in the container. Install the runner on the login node, set `HPC_KEY_SECRET` in `.env` and pin the host key in **Administration → HPC cluster**: see [hpc.md](hpc.md).
+
 ## Container entrypoint
 
 The image's entrypoint applies migrations, seeds the roles and the first admin, and starts Gunicorn (`GUNICORN_WORKERS`, `GUNICORN_THREADS`). Any other command replaces Gunicorn, for example `docker compose run --rm dagonweb flask --app wsgi cleanup-runs`.

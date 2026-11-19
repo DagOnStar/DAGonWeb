@@ -77,6 +77,10 @@ When a task finishes, click its graph node to inspect its scratch directory. You
 
 Click your name in the navigation bar to open **Your account**: change your display name and password, **download your data** (JSON), or **delete your account** with all your workflows, runs and files. **Cookie settings** in the page footer changes your cookie choice at any time. See the privacy notice (`/privacy`) for details.
 
+### Cluster account
+
+On servers installed on an HPC cluster, runs execute as **your own Unix account**. Open **Your account → Cluster account** and enter your cluster user name. Then add the line DAGonWeb shows to `~/.ssh/authorized_keys` on the cluster, and press **Verify cluster account**. The key can only start `dagonweb-runner`, which runs your workflows in `$SCRATCH/dagonweb` (or `~/dagonweb`). To revoke access, remove the line or press **Unlink**. See [hpc.md](hpc.md).
+
 ## Permissions and safety
 
 Users manage their own workflows and runs. Administrators can manage all workflows, users, roles, and the site settings (see [Administration](administration.md)). What each user may do (create, run, publish, use the assistant) depends on the permissions of their roles. A Batch command is executable code: only run workflows from trusted users and deploy untrusted workloads in isolated infrastructure.

@@ -2,7 +2,7 @@
 {% block title %}Your account - {{ branding.site_name }}{% endblock %}
 {% block content %}
 <div class="page-header mb-3"><div><h1 class="h4">Your account</h1><p class="page-subtitle small mb-0">Profile, password and your personal data.</p></div></div>
-{{ error_summary([profile, password_form, delete_form]) }}
+{{ error_summary([profile, password_form, delete_form, cluster_form]) }}
 <div class="row g-3">
   <div class="col-lg-6">
     <section class="card h-100" aria-labelledby="profileTitle"><div class="card-body">
@@ -36,6 +36,47 @@
       {% endif %}
     </div></section>
   </div>
+  {% if hpc_enabled or current_user.unix_username %}
+  <div class="col-12">
+    <section class="card" aria-labelledby="clusterTitle"><div class="card-body">
+      <h2 class="h5" id="clusterTitle">Cluster account</h2>
+      {% if current_user.unix_linked %}
+      <p class="small">Your workflow runs execute on the cluster as the Unix user <strong>{{ current_user.unix_username }}</strong>, with your own files, quotas and Slurm accounting. Linked on {{ current_user.unix_linked_at.strftime('%Y-%m-%d') }}.</p>
+      <p class="small">DAGonWeb signs in with a key that can only start <code>dagonweb-runner</code>: it cannot open a shell, forward ports or read files outside your DAGonWeb run folders.</p>
+      <form method="post" action="{{ url_for('account.cluster_unlink') }}" class="d-inline">
+        {{ cluster_action.hidden_tag() }}
+        <button type="submit" class="btn btn-outline-danger btn-sm">Unlink cluster account</button>
+      </form>
+      {% elif current_user.unix_public_key %}
+      <p class="small">To prove that <strong>{{ current_user.unix_username }}</strong> is your account, add the DAGonWeb key to it. Only you can change your <code>authorized_keys</code> file.</p>
+      <ol class="small">
+        <li>Sign in to the cluster as usual, for example <code>ssh {{ current_user.unix_username }}@{{ cluster_host }}</code>.</li>
+        <li>Append this single line to <code>~/.ssh/authorized_keys</code>, for example with <code>nano ~/.ssh/authorized_keys</code>. Copy it exactly, on one line:
+          <pre class="cluster-key mt-2 mb-2 p-2 border rounded" tabindex="0" aria-label="Line to add to authorized_keys"><code>{{ authorized_keys_line }}</code></pre>
+          It only lets DAGonWeb start <code>dagonweb-runner</code> as you{{ ', and only from the DAGonWeb server' if 'from=' in authorized_keys_line else '' }}.</li>
+        <li>Come back here and verify.</li>
+      </ol>
+      <div class="d-flex flex-wrap gap-2">
+        <form method="post" action="{{ url_for('account.cluster_verify') }}">
+          {{ cluster_action.hidden_tag() }}
+          <button type="submit" class="btn btn-primary btn-sm">Verify cluster account</button>
+        </form>
+        <form method="post" action="{{ url_for('account.cluster_unlink') }}">
+          {{ cluster_action.hidden_tag() }}
+          <button type="submit" class="btn btn-outline-secondary btn-sm">Cancel</button>
+        </form>
+      </div>
+      {% else %}
+      <p class="small">Workflows on this server run on the cluster as <em>your own</em> Unix account. Enter your cluster user name; DAGonWeb then gives you a restricted key to add to your account.</p>
+      <form method="post" action="{{ url_for('account.cluster_link') }}" novalidate>
+        {{ cluster_form.hidden_tag() }}
+        {{ field(cluster_form.unix_username, help='The name you use with ssh on the login node.') }}
+        {{ cluster_form.submit(class='btn btn-primary btn-sm') }}
+      </form>
+      {% endif %}
+    </div></section>
+  </div>
+  {% endif %}
   <div class="col-lg-6">
     <section class="card h-100" aria-labelledby="dataTitle"><div class="card-body">
       <h2 class="h5" id="dataTitle">Your data</h2>
