@@ -12,6 +12,7 @@
       {% for key, label, _ in admin_sections %}
         <a class="list-group-item list-group-item-action {% if current_section == key %}active{% endif %}" href="{{ url_for('admin.settings_section', section=key) }}">{{ {'appearance': '🎨', 'authentication': '🔐', 'execution': '⚙', 'hpc': '🖥', 'storage': '💾', 'smtp': '✉', 'llm': '✨', 'privacy': '🛡', 'accessibility': '♿'}.get(key, '•') }} {{ label }}</a>
       {% endfor %}
+      <a class="list-group-item list-group-item-action {% if endpoint.startswith('admin.cluster_runs') %}active{% endif %}" href="{{ url_for('admin.cluster_runs') }}">🛰 Cluster runs</a>
       <a class="list-group-item list-group-item-action {% if endpoint == 'admin.dagon_ini' %}active{% endif %}" href="{{ url_for('admin.dagon_ini') }}">🧩 DAGonStar dagon.ini</a>
       <a class="list-group-item list-group-item-action {% if endpoint == 'admin.logs' %}active{% endif %}" href="{{ url_for('admin.logs') }}">📜 Audit log</a>
     </div>

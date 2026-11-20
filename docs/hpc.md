@@ -17,7 +17,7 @@ browser ─TLS─▶ DAGonWeb container ──ssh alice@login (forced command)�
    ```
 
    Only that Unix user can write their `authorized_keys`, so when DAGonWeb signs in with the key (**Verify cluster account**), it has proved that the DAGonWeb account controls the Unix account. DAGonWeb also checks that the runner reports the same user name and a uid of at least `hpc_min_uid`. A verified cluster account can be linked to only one DAGonWeb account.
-2. **What the key allows.** `restrict` disables shells, PTYs and port, agent and X11 forwarding. `command=` makes sshd start `dagonweb-runner` whatever the client asks for, and `from=` limits the key to the DAGonWeb container's network. The runner accepts a fixed set of verbs (`ping`, `submit`, `status`, `cancel`, `ls`, `get`, `archive`, `put`, `keys`, `delete`). It never passes anything to a shell, and it touches files only below its base directory (`$SCRATCH/dagonweb`, otherwise `~/dagonweb`). `put` writes only below a run's `_dagonweb/data/` folder, and `keys` only reads the user's `authorized_keys`.
+2. **What the key allows.** `restrict` disables shells, PTYs and port, agent and X11 forwarding. `command=` makes sshd start `dagonweb-runner` whatever the client asks for, and `from=` limits the key to the DAGonWeb container's network. The runner accepts a fixed set of verbs (`ping`, `submit`, `status`, `cancel`, `ls`, `get`, `archive`, `put`, `keys`, `info`, `delete`). It never passes anything to a shell, and it touches files only below its base directory (`$SCRATCH/dagonweb`, otherwise `~/dagonweb`). `put` writes only below a run's `_dagonweb/data/` folder, `keys` only reads the user's `authorized_keys`, and `info` reports the user's storage, quota and Slurm jobs.
 3. **Running.** When a user presses **Run**, DAGonWeb turns the workflow into a run specification. These are the same `DagonTask` arguments the local executor builds from `app/task_specs.py`. DAGonWeb sends the specification to `dagonweb-runner submit` as the submitter's own account. The runner starts DAGonStar detached, in `run_<id>/`, with the checkpoint in `run_<id>/_dagonweb/checkpoint.json`, and writes task events to a JSON-lines file. DAGonWeb polls `status` and updates the run page, the logs and the task states exactly as it does for local runs. Slurm tasks are submitted with `sbatch` as the user.
 
    With `hpc_orchestrator` set to `slurm`, the DAGonStar orchestrator itself runs as a small Slurm job (`sbatch --wrap`, with the options in `hpc_sbatch_options`) instead of a detached process on the login node. The run log shows the job id while the job waits in the queue, and **Cancel** calls `scancel`.
@@ -63,6 +63,10 @@ browser ─TLS─▶ DAGonWeb container ──ssh alice@login (forced command)�
    | `sbatch_options` | A list of `sbatch` options that replaces DAGonWeb's `hpc_sbatch_options`. |
    | `max_put_bytes` | Largest Upload file the runner accepts (default 1 GB). |
    | `authorized_keys_files` | Where `keys` reads public keys for SSH sign-in, with `%h` and `%u` as in sshd (default `~/.ssh/authorized_keys` and `~/.ssh/authorized_keys2`). Match your `AuthorizedKeysFile`. |
+   | `quota_command` | A command, as a list, whose output the account page shows as the user's quota, with `%u` for the user name. For example `["lfs", "quota", "-h", "-u", "%u", "/scratch"]` or `["quota", "-s"]`. Not set: no quota report. |
+   | `queue_command` | Replaces the default `squeue -h -u <user> -o "%i\|%j\|%T\|%M\|%l\|%P\|%R"`. It must print the same seven `\|`-separated fields. |
+
+   The runner runs these commands as the user, without a shell, with a 20-second time limit.
 
 3. Make sure sshd accepts public keys from the Docker network. Check `PubkeyAuthentication yes`, `AllowUsers` / `AllowGroups`, and any `Match Address` blocks. If the site uses `AuthorizedKeysFile` in a non-default location, tell users where to add the line.
 
@@ -111,6 +115,29 @@ Every key can also be pinned with `DAGONWEB_<KEY>`, for example `DAGONWEB_HPC_EN
 
 To revoke access at any time, delete the line from `authorized_keys`, or press **Unlink cluster account** in DAGonWeb (which deletes the key).
 
+Once linked, the cluster account card also shows **Storage and Slurm queue**, read from the cluster when the page opens and on **Refresh**:
+
+- the DAGonWeb folder on the cluster and how much space the user's runs take;
+- the free space on that file system, and the site's quota report if `quota_command` is set;
+- the user's own Slurm jobs, with links to the runs that DAGonWeb started.
+
+![Cluster account card with the DAGonWeb folder, free space, the site quota report and two Slurm jobs, one linked to its run](images/hpc-account.png)
+
+## Checking a cluster set-up
+
+After installing the runner, check the whole chain from the DAGonWeb container:
+
+```bash
+docker compose exec dagonweb flask --app wsgi hpc-check
+docker compose exec dagonweb flask --app wsgi hpc-check --email alice@example.org --run
+```
+
+The first command checks that cluster mode is on, that the login node answers with the pinned host key, and that `HPC_KEY_SECRET` is set. With `--email`, it signs in as that user's linked account. It then checks the runner version, that the same DAGonStar version is installed on the cluster, Slurm, free space, and that the runner reads the same `authorized_keys` file as sshd. With `--run`, it also runs the Batch template on the cluster as that user, then deletes the workflow and its run folder (`--keep` keeps them). It exits with status 1 if a check fails.
+
+**Administration → Cluster runs** runs the same checks with the administrator's own linked account, without a test run. The page also lists every active cluster run: who started it, the Unix account, the Slurm job, and whether a DAGonWeb process is following it. A run whose heartbeat is stale, for example after a restart, can be reconnected there one by one or all at once. Reconnecting only resumes reading the run's status, through its submitter's own account.
+
+![Administration → Cluster runs after a connection check: eleven passing checks, from the pinned host key to SSH-key sign-in](images/hpc-admin.png)
+
 ## Signing in with your own SSH key
 
 With `hpc_ssh_login_enabled` on, the sign-in page offers **Sign in with your cluster SSH key** to users whose account is already linked:
@@ -126,10 +153,12 @@ With `hpc_ssh_login_enabled` on, the sign-in page offers **Sign in with your clu
 
 The private key never leaves your computer. Keys limited with `command=`, `from=`, `principals=` or `cert-authority`, including DAGonWeb's own key, do not count. Each challenge can be used once, and every answer for an unknown or unlinked name is the same as for a wrong key, so names cannot be probed. Turn the setting off to go back to the site's usual sign-in.
 
+![SSH-key sign-in: the one-time challenge, the ssh-keygen command to sign it, and the box for the signature (dark theme)](images/hpc-ssh-login.png)
+
 ## Testing
 
-- `tests/test_hpc.py` simulates sshd. It accepts only a key whose public half was added to `authorized_keys`, then starts the real runner with `SSH_ORIGINAL_COMMAND` set. It covers linking, runs as the user, resume, file access and ZIP archives, path confinement, Upload and Form input, Table/Chart/Download results, FAIR exports, reconnecting after a restart, the Slurm orchestrator (with fake `sbatch`, `squeue` and `scancel`), SSH-key sign-in (signed with the real `ssh-keygen`), refusals and settings.
-- `tests/test_hpc_sshd.py` starts a real, unprivileged OpenSSH `sshd` on a free localhost port. It is skipped when OpenSSH is not installed. DAGonWeb links an account through paramiko, runs a workflow and reads its files. The OpenSSH client then checks, with the same key, that a shell, a PTY and forwarding are refused, that commands chained with `;` are refused, and that a wrong host key is rejected.
+- `tests/test_hpc.py` simulates sshd. It accepts only a key whose public half was added to `authorized_keys`, then starts the real runner with `SSH_ORIGINAL_COMMAND` set. It covers linking, runs as the user, resume, file access and ZIP archives, path confinement, Upload and Form input, Table/Chart/Download results, FAIR exports, reconnecting after a restart, the Slurm orchestrator (with fake `sbatch`, `squeue` and `scancel`), SSH-key sign-in (signed with the real `ssh-keygen`), refusals and settings, the storage and queue report (with a fake `squeue` and a quota command), the administration page, and `hpc-check` including a test run.
+- `tests/test_hpc_sshd.py` starts a real, unprivileged OpenSSH `sshd` on a free localhost port. It is skipped when OpenSSH is not installed. DAGonWeb links an account through paramiko, runs a workflow and reads its files. The OpenSSH client then checks, with the same key, that a shell, a PTY and forwarding are refused, that commands chained with `;` are refused, and that a wrong host key is rejected. Finally, `hpc-check --run` runs against the real sshd, and its host key probe must tell the right key from a wrong one.
 
 ## Current limits
 

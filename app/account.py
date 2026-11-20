@@ -2,9 +2,10 @@
 portability and erasure, plus password changes for local accounts."""
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
-from flask import Blueprint, Response, flash, redirect, render_template, url_for
+from flask import Blueprint, Response, flash, jsonify, redirect, render_template, url_for
 from flask_login import current_user, login_required, logout_user
 from flask_wtf import FlaskForm
 from wtforms import PasswordField, StringField, SubmitField
@@ -166,6 +167,46 @@ def cluster_unlink():
     db.session.commit()
     flash("Cluster account unlinked and the DAGonWeb key deleted. Also remove the dagonweb line from ~/.ssh/authorized_keys on the cluster.", "success")
     return redirect(url_for("account.index"))
+
+
+DAGONWEB_JOB = re.compile(r"^dagonweb-run-([0-9]{1,12})$")
+
+
+@bp.get("/cluster/info")
+@login_required
+def cluster_info():
+    """Storage, quota and Slurm queue of the user's own cluster account (JSON, read on demand)."""
+    if not hpc.enabled() or not current_user.unix_linked:
+        return jsonify({"error": "No verified cluster account."}), 404
+    try:
+        with hpc.client_for(current_user) as client:
+            info = client.info()
+    except hpc.HpcError as exc:
+        return jsonify({"error": f"Cannot reach the cluster: {exc}"}), 502
+    own_runs = {run.id: run for run in WorkflowRun.query.filter(WorkflowRun.user_id == current_user.id, WorkflowRun.unix_username.isnot(None))}
+    queue = info.get("queue")
+    jobs = []
+    for job in queue if isinstance(queue, list) else []:
+        if not isinstance(job, dict):
+            continue
+        item = {key: str(job.get(key) or "")[:200] for key in ("id", "name", "state", "elapsed", "limit", "partition", "reason")}
+        match = DAGONWEB_JOB.match(item["name"])
+        run = own_runs.get(int(match.group(1))) if match else None
+        if run is not None:
+            item["run_url"] = url_for("workflows.run_detail", workflow_id=run.workflow_id, run_id=run.id)
+            item["run_label"] = f"{run.workflow.name} #{run.id}"
+        jobs.append(item)
+    quota = info.get("quota") if isinstance(info.get("quota"), dict) else None
+    return jsonify({
+        "user": info.get("user"),
+        "base": info.get("base"),
+        "filesystem": info.get("filesystem") or {},
+        "dagonweb": info.get("dagonweb") or {},
+        "quota": {"ok": bool(quota.get("ok")), "text": str(quota.get("text") or "")[:8000]} if quota else None,
+        "slurm": isinstance(queue, list),
+        "queue": jobs,
+        "queue_error": str(info.get("queue_error") or ""),
+    })
 
 
 def _active_cluster_runs() -> bool:

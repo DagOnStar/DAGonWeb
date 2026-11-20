@@ -64,12 +64,15 @@ class FakeSSH:
 
     def add(self, user: User) -> None:
         self.authorized.add(" ".join(user.unix_public_key.split()[:2]))
+        keys_file = Path(json.loads(self.config.read_text())["authorized_keys_files"][0])
+        with keys_file.open("a", encoding="utf-8") as handle:
+            handle.write(hpc.authorized_keys_line(user) + "\n")
 
 
 @pytest.fixture()
 def cluster(tmp_path):
     config = tmp_path / "runner.json"
-    config.write_text(json.dumps({"base": str(tmp_path / "cluster"), "min_uid": 0}), encoding="utf-8")
+    config.write_text(json.dumps({"base": str(tmp_path / "cluster"), "min_uid": 0, "authorized_keys_files": [str(tmp_path / "authorized_keys")]}), encoding="utf-8")
     return FakeSSH(config)
 
 
@@ -725,3 +728,99 @@ def test_ssh_sign_in_is_off_by_default(app):
     client = app.test_client()
     assert client.get("/login/ssh").status_code == 404
     assert "cluster SSH key" not in client.get("/login").get_data(as_text=True)
+
+
+# ---------------------------------------------------------------- storage, queue, admin view, site checks
+
+
+def test_account_page_shows_cluster_storage_quota_and_queue(app, cluster, tmp_path, monkeypatch):
+    with app.app_context():
+        user = link(cluster)
+        run = start(new_workflow("QueueMe", template="batch"), user)
+        run_id, workflow_id = run.id, run.workflow_id
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "squeue").write_text(f"#!/bin/sh\necho '9001|dagonweb-run-{run_id}|RUNNING|0:42|1:00:00|service|node01'\necho '9002|my<b>job|PENDING|0:00|2:00:00|gpu|(Priority)'\n")
+    (bin_dir / "squeue").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    config = json.loads(cluster.config.read_text())
+    cluster.config.write_text(json.dumps({**config, "quota_command": ["echo", "quota for %u: 1G of 10G"]}), encoding="utf-8")
+    client = login(app)
+    assert 'id="clusterInfo"' in client.get("/account/").get_data(as_text=True)
+    info = client.get("/account/cluster/info").get_json()
+    assert info["user"] == UNIX_USER and info["dagonweb"]["runs"] == 1 and info["dagonweb"]["bytes"] > 0
+    assert info["filesystem"]["total"] > 0
+    assert info["quota"] == {"ok": True, "text": f"quota for {UNIX_USER}: 1G of 10G"}
+    first, second = info["queue"]
+    assert first["run_url"] == f"/workflows/{workflow_id}/runs/{run_id}" and first["state"] == "RUNNING"
+    assert second["name"] == "my<b>job" and "run_url" not in second  # rendered with textContent by cluster-info.js
+    # Someone without a verified cluster account gets nothing.
+    with app.app_context():
+        make_user("nolink@example.org")
+    assert login(app, "nolink@example.org").get("/account/cluster/info").status_code == 404
+
+
+def test_account_info_without_slurm(app, cluster, monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    with app.app_context():
+        link(cluster)
+    info = login(app).get("/account/cluster/info").get_json()
+    assert info["slurm"] is False and info["queue"] == [] and info["quota"] is None
+
+
+def test_admins_see_and_reconnect_stale_cluster_runs(app, cluster):
+    from app.executor import remote
+
+    with app.app_context():
+        user = link(cluster)
+        workflow = new_workflow("Stale", document={"name": "Stale", "tasks": {
+            "slow": {"name": "slow", "type": "batch", "dagonweb": {"config": {"command": "sleep 2; echo done > done.txt"}}}}})
+        run = WorkflowRun(workflow_id=workflow.id, user_id=user.id, status="pending", scratch_path="", log="", unix_username=user.unix_username)
+        db.session.add(run)
+        db.session.commit()
+        run_id = run.id
+        original = remote.follow
+        remote.follow = lambda client, run_id: None
+        try:
+            run_job(workflow.id, run_id)
+        finally:
+            remote.follow = original
+        db.session.get(WorkflowRun, run_id).monitor_heartbeat = None
+        db.session.commit()
+        make_user("plain@example.org")
+    assert login(app, "plain@example.org").get("/admin/cluster-runs").status_code in (302, 403)
+    admin = login(app)
+    page = admin.get("/admin/cluster-runs").get_data(as_text=True)
+    assert f"Stale #{run_id}" in page and ">stale<" in page and "Reconnect run" in page
+    response = admin.post("/admin/cluster-runs/reconnect", data={"run_id": run_id}, follow_redirects=True)
+    assert f"Reconnecting to run #{run_id}." in response.get_data(as_text=True)
+    wait_for(app, run_id, lambda run: run.status != "running")
+    with app.app_context():
+        run = db.session.get(WorkflowRun, run_id)
+        assert run.status == "success", run.log
+        assert AuditLog.query.filter_by(action="admin.cluster_reconnect").count() == 1
+    assert "No active cluster runs." in admin.get("/admin/cluster-runs").get_data(as_text=True)
+
+
+def test_hpc_check_reports_problems_and_runs_a_test_workflow(app, cluster, monkeypatch):
+    from app import hpc_check
+
+    with app.app_context():
+        link(cluster)
+        settings.set_value("hpc_ssh_host", "127.0.0.1")
+        settings.set_value("hpc_ssh_port", 9)  # nothing listens: the site check fails
+        db.session.commit()
+    runner = app.test_cli_runner()
+    result = runner.invoke(args=["hpc-check", "--email", "admin@example.org", "--run"])
+    assert result.exit_code == 1, result.output
+    assert "[FAIL] Login node 127.0.0.1:9 is reachable" in result.output
+    assert "[  ok] Runner version 3" in result.output and "[  ok] DAGonStar on the cluster" in result.output
+    assert "[  ok] A test workflow runs on the cluster as the user" in result.output
+    with app.app_context():
+        assert Workflow.query.filter_by(name="hpc-check").count() == 0  # cleaned up
+    monkeypatch.setattr(hpc_check, "probe_host_key", lambda host, port, pinned: (True, "matches"))
+    result = runner.invoke(args=["hpc-check"])
+    assert result.exit_code == 0, result.output
+    # The administration page runs the same checks with the administrator's own account.
+    page = login(app).post("/admin/cluster-runs/check").get_data(as_text=True)
+    assert "Runner version 3" in page and "failed" in page

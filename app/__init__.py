@@ -173,6 +173,22 @@ def create_app(config_object: type[Config] = Config) -> Flask:
         for thread in threads:
             thread.join()
 
+    @app.cli.command("hpc-check")
+    @click.option("--email", default=None, help="Also check this user's linked cluster account.")
+    @click.option("--run", "run_test", is_flag=True, help="Also run a small workflow on the cluster as that user.")
+    @click.option("--keep", is_flag=True, help="Keep the test workflow and its run folder.")
+    def hpc_check_command(email: str | None, run_test: bool, keep: bool) -> None:
+        """Check the HPC cluster set-up: host key, runner, DAGonStar, Slurm, and optionally a test run."""
+        from .hpc_check import all_checks, summary
+
+        checks = all_checks(email, run=run_test, keep=keep)
+        for check in checks:
+            print(f"[{check.mark:>4}] {check.label}" + (f": {check.detail}" if check.detail else ""))
+        totals = summary(checks)
+        print(f"{len(checks)} check(s), {totals['failed']} failed, {totals['warnings']} warning(s).")
+        if totals["failed"]:
+            raise SystemExit(1)
+
     @app.cli.command("cleanup-runs")
     @click.option("--days", type=int, default=None, help="Override the configured retention period.")
     def cleanup_runs_command(days: int | None) -> None:

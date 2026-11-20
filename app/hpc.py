@@ -292,6 +292,9 @@ class RunnerClient:
     def put(self, run_id: int, path: str, content: bytes) -> dict[str, Any]:
         return self.call("put", str(run_id), path, stdin=content)
 
+    def info(self) -> dict[str, Any]:
+        return self.call("info")
+
     def keys(self) -> list[dict[str, str]]:
         return [item for item in self.call("keys").get("keys") or [] if isinstance(item, dict)]
 
