@@ -27,7 +27,7 @@ Settings edited in the [administration panel](administration.md) are stored in t
 | Appearance | `site_name`, `tagline`, `footer_text`, `default_theme` (`auto`, `light`, `dark`), `brand_color`, `navbar_color` |
 | Authentication | `local_login_enabled`, `registration_enabled`, `guest_playground_enabled`, `registration_domains`, `sso_auto_create`, `google_enabled`, `google_client_id`, `google_client_secret`, `google_hosted_domain`, `microsoft_enabled`, `microsoft_tenant`, `microsoft_client_id`, `microsoft_client_secret`, `oidc_enabled`, `oidc_name`, `oidc_discovery_url`, `oidc_client_id`, `oidc_client_secret`, `oidc_scopes` |
 | Execution | `execution_backend` (`thread` or `redis`), `redis_url`, `redis_queue`, `max_concurrent_runs`, `run_timeout_hours` |
-| HPC cluster | `hpc_enabled`, `hpc_ssh_host`, `hpc_ssh_port`, `hpc_ssh_host_key`, `hpc_runner_command`, `hpc_source_cidr`, `hpc_min_uid`, `hpc_poll_seconds` ([hpc.md](hpc.md)) |
+| HPC cluster | `hpc_enabled`, `hpc_ssh_host`, `hpc_ssh_port`, `hpc_ssh_host_key`, `hpc_runner_command`, `hpc_source_cidr`, `hpc_min_uid`, `hpc_poll_seconds`, `hpc_orchestrator`, `hpc_sbatch_options`, `hpc_ssh_login_enabled` ([hpc.md](hpc.md)) |
 | Storage | `scratch_dir`, `run_retention_days`, `max_upload_mb` |
 | SMTP | `smtp_host`, `smtp_port`, `smtp_from`, `smtp_user`, `smtp_password`, `smtp_tls` |
 | LLM connector | `llm_enabled`, `llm_base_url`, `llm_api_key`, `llm_model`, `llm_temperature`, `llm_timeout`, `llm_max_steps` |

@@ -274,7 +274,10 @@ class RunnerClient:
         return list(self.call("ls", str(run_id), path or ".").get("files") or [])
 
     def get(self, run_id: int, path: str, max_bytes: int) -> bytes:
-        code, output = self.transport.exec(shlex.join(["get", str(run_id), path, str(max_bytes)]), None, max_output=max_bytes + 4096)
+        return self._raw(["get", str(run_id), path, str(max_bytes)], None, max_bytes + 4096)
+
+    def _raw(self, words: list[str], stdin: bytes | None, max_output: int) -> bytes:
+        code, output = self.transport.exec(shlex.join(words), stdin, max_output=max_output)
         if code:
             try:
                 message = json.loads(output.decode("utf-8").strip().splitlines()[-1]).get("error")
@@ -282,6 +285,15 @@ class RunnerClient:
                 message = f"dagonweb-runner exited with {code}"
             raise HpcError(str(message))
         return output
+
+    def archive(self, run_id: int, path: str, max_bytes: int) -> bytes:
+        return self._raw(["archive", str(run_id), path or ".", str(max_bytes)], None, max_bytes + 1024 * 1024)
+
+    def put(self, run_id: int, path: str, content: bytes) -> dict[str, Any]:
+        return self.call("put", str(run_id), path, stdin=content)
+
+    def keys(self) -> list[dict[str, str]]:
+        return [item for item in self.call("keys").get("keys") or [] if isinstance(item, dict)]
 
     def delete(self, run_id: int) -> None:
         self.call("delete", str(run_id))

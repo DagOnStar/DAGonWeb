@@ -26,7 +26,7 @@ Browser navigation never stops a run. With the thread backend, restarting the ap
 
 ## Cluster execution
 
-With **HPC cluster** mode on, `app/executor/remote.py` replaces the in-process executor. It sends the same `DagonTask` arguments as a JSON run specification to `dagonweb-runner` on the login node. It sends them over SSH, as the submitter's own Unix account, and follows the runner's task events. Task folders and the checkpoint live in `run_<id>/` below the user's runner base. See [hpc.md](hpc.md).
+With **HPC cluster** mode on, `app/executor/remote.py` replaces the in-process executor. It sends the same `DagonTask` arguments as a JSON run specification to `dagonweb-runner` on the login node. It sends them over SSH, as the submitter's own Unix account, and follows the runner's task events. Task folders and the checkpoint live in `run_<id>/` below the user's runner base. The orchestrator runs detached on the login node or, with `hpc_orchestrator = slurm`, as a Slurm job. Cluster runs do not take a slot in the local thread pool or the Redis queue: a lightweight thread only polls the runner, writes a heartbeat, and is replaced by another process if it goes away. See [hpc.md](hpc.md).
 
 ## Resume
 

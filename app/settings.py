@@ -102,6 +102,9 @@ _DEFS: list[SettingDef] = [
     SettingDef("hpc_runner_command", "Runner command", "hpc", default="/opt/dagonweb/bin/dagonweb-runner", group="Runner", help="Forced command written into each user's <code>authorized_keys</code> line. The key can run nothing else."),
     SettingDef("hpc_source_cidr", "Allowed source addresses", "hpc", default="", group="Runner", help="<code>from=</code> restriction of the key, for example the Docker bridge <code>172.16.0.0/12</code>. Empty leaves it out (not recommended)."),
     SettingDef("hpc_min_uid", "Lowest allowed Unix uid", "hpc", "int", 1000, minimum=1, maximum=2_000_000_000, group="Runner", help="Accounts below it (root, system accounts) can never be linked."),
+    SettingDef("hpc_orchestrator", "Run the DAGonStar orchestrator", "hpc", "select", "login", options=(("login", "On the login node (detached process)"), ("slurm", "As a small Slurm job (sbatch)")), group="Runner", help="With Slurm, each run's orchestrator is a job that submits and watches the workflow's tasks. Cluster administrators can force a mode in <code>/etc/dagonweb/runner.json</code>."),
+    SettingDef("hpc_sbatch_options", "sbatch options for the orchestrator job", "hpc", default="--time=24:00:00 --mem=2G --cpus-per-task=1", group="Runner", help="Long options only, for example <code>--partition=service --time=48:00:00</code>."),
+    SettingDef("hpc_ssh_login_enabled", "Allow signing in with the user's own cluster SSH key", "hpc", "bool", False, group="Sign-in", help="Users with a linked cluster account sign in by signing a one-time challenge with <code>ssh-keygen -Y sign</code>, using any key in their <code>authorized_keys</code>. The private key never leaves their computer."),
     SettingDef("hpc_poll_seconds", "Status poll interval (seconds)", "hpc", "number", 5, minimum=0.1, maximum=300, group="Runner"),
     # Storage
     SettingDef("scratch_dir", "Scratch directory", "storage", default="", help="Mount this path as a persistent volume in containers. Every run, checkpoint and upload stays below it."),
@@ -278,7 +281,19 @@ _EXTRA_VALIDATORS = {
     "hpc_ssh_host": _validate_host,
     "hpc_runner_command": _validate_runner,
     "hpc_source_cidr": _validate_cidrs,
+    "hpc_sbatch_options": lambda definition, value: _validate_sbatch(definition, value),
 }
+
+
+def _validate_sbatch(definition: SettingDef, value: str) -> None:
+    import shlex
+
+    try:
+        options = shlex.split(value)
+    except ValueError:
+        raise ValueError(f"{definition.label} has unbalanced quotes.") from None
+    if any(not option.startswith("--") for option in options):
+        raise ValueError(f"{definition.label} accepts long options only, for example --time=24:00:00.")
 
 
 def section_values(section: str) -> list[dict[str, Any]]:

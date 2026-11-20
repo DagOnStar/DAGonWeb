@@ -79,7 +79,7 @@ Click your name in the navigation bar to open **Your account**: change your disp
 
 ### Cluster account
 
-On servers installed on an HPC cluster, runs execute as **your own Unix account**. Open **Your account → Cluster account** and enter your cluster user name. Then add the line DAGonWeb shows to `~/.ssh/authorized_keys` on the cluster, and press **Verify cluster account**. The key can only start `dagonweb-runner`, which runs your workflows in `$SCRATCH/dagonweb` (or `~/dagonweb`). To revoke access, remove the line or press **Unlink**. See [hpc.md](hpc.md).
+On servers installed on an HPC cluster, runs execute as **your own Unix account**. Open **Your account → Cluster account** and enter your cluster user name. Then add the line DAGonWeb shows to `~/.ssh/authorized_keys` on the cluster, and press **Verify cluster account**. The key can only start `dagonweb-runner`, which runs your workflows in `$SCRATCH/dagonweb` (or `~/dagonweb`). To revoke access, remove the line or press **Unlink**. If the administrator allows it, you can then also sign in with **Sign in with your cluster SSH key**: sign the challenge shown with `ssh-keygen -Y sign -n dagonweb-login` and paste the signature. See [hpc.md](hpc.md).
 
 ## Permissions and safety
 

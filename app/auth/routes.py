@@ -1,11 +1,15 @@
+import re
+import secrets
+import shlex
+import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
-from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, url_for
+from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_required, login_user, logout_user
-from .forms import CompleteRegistrationForm, LoginForm, RegisterForm
+from .forms import CompleteRegistrationForm, LoginForm, RegisterForm, SshLoginForm, SshSignatureForm
 from . import sso
-from .. import audit, privacy, settings
+from .. import audit, hpc, privacy, settings, sshsig
 from ..extensions import db
 from ..mail import send_mail
 from ..models import RegistrationToken, Role, User
@@ -44,7 +48,98 @@ def login():
             return redirect(safe_next(request.args.get("next")))
         audit.commit("auth.login_failed", form.email.data.lower()[:255])
         flash("Invalid credentials or disabled account.", "danger")
-    return render_template("auth/login.html", form=form, providers=sso.providers(), local_enabled=local_enabled, registration_enabled=settings.get("registration_enabled"))
+    return render_template("auth/login.html", form=form, providers=sso.providers(), local_enabled=local_enabled, registration_enabled=settings.get("registration_enabled"), ssh_login=ssh_login_enabled())
+
+
+# ---------------------------------------------------------------- sign-in with an SSH key
+
+SSH_CHALLENGE_SECONDS = 300
+SSH_SESSION_KEY = "ssh_login_challenge"
+
+
+def ssh_login_enabled() -> bool:
+    return bool(settings.get("hpc_enabled") and settings.get("hpc_ssh_login_enabled"))
+
+
+def ssh_challenge(username: str) -> str:
+    """A one-time text to sign; it names this site and the account so it cannot be replayed elsewhere."""
+    host = re.sub(r"[^A-Za-z0-9.:\[\]-]", "", request.host)[:255]
+    return f"{host} sign-in for {username} {secrets.token_urlsafe(24)}"
+
+
+@bp.route("/login/ssh", methods=["GET", "POST"])
+def ssh_login():
+    """Step 1: the cluster user name. Every name gets a challenge, so names cannot be probed."""
+    if not ssh_login_enabled():
+        abort(404)
+    if current_user.is_authenticated:
+        return redirect(url_for("workflows.list_workflows"))
+    form = SshLoginForm()
+    if form.validate_on_submit():
+        try:
+            username = hpc.validate_username(form.username.data)
+        except ValueError as exc:
+            form.username.errors.append(str(exc))
+        else:
+            session[SSH_SESSION_KEY] = {"username": username, "challenge": ssh_challenge(username), "expires": time.time() + SSH_CHALLENGE_SECONDS}
+            return redirect(url_for("auth.ssh_login_sign", next=request.args.get("next")))
+    return render_template("auth/login_ssh.html", form=form, step="name")
+
+
+@bp.route("/login/ssh/sign", methods=["GET", "POST"])
+def ssh_login_sign():
+    """Step 2: the signature of the challenge, made with a key in the user's authorized_keys."""
+    if not ssh_login_enabled():
+        abort(404)
+    pending = session.get(SSH_SESSION_KEY)
+    if not isinstance(pending, dict) or float(pending.get("expires") or 0) < time.time():
+        session.pop(SSH_SESSION_KEY, None)
+        flash("The sign-in challenge expired. Ask for a new one.", "warning")
+        return redirect(url_for("auth.ssh_login"))
+    form = SshSignatureForm()
+    if form.validate_on_submit():
+        session.pop(SSH_SESSION_KEY, None)  # single use, whatever the outcome
+        username, challenge = str(pending["username"]), str(pending["challenge"])
+        try:
+            user = verify_ssh_login(username, challenge, form.signature.data)
+        except sshsig.SignatureError as exc:
+            audit.commit("auth.login_failed", username, f"sshsig: {exc}"[:500])
+            flash(f"Sign-in failed: {exc} Ask for a new challenge and try again.", "danger")
+            return redirect(url_for("auth.ssh_login"))
+        finish_login(user, method="sshsig")
+        return redirect(safe_next(request.args.get("next")))
+    command = f"printf '%s' {shlex.quote(str(pending['challenge']))} | ssh-keygen -Y sign -n {sshsig.NAMESPACE} -f ~/.ssh/id_ed25519"
+    return render_template("auth/login_ssh.html", form=form, step="sign", username=pending["username"], challenge=pending["challenge"],
+                           command=command, minutes=SSH_CHALLENGE_SECONDS // 60)
+
+
+def verify_ssh_login(username: str, challenge: str, armored: str) -> User:
+    """Return the user whose cluster account holds the key that signed ``challenge``.
+
+    The signature is checked first, offline. Then DAGonWeb asks the runner, as
+    that cluster account, for its ``authorized_keys`` and looks for the same
+    public key on an entry that allows a full login.
+    """
+    signature = sshsig.parse(armored)
+    challenge_bytes = challenge.encode("utf-8")
+    try:
+        sshsig.verify(signature, challenge_bytes)
+    except sshsig.SignatureError:
+        sshsig.verify(signature, challenge_bytes + b"\n")  # signed with echo instead of printf
+    refused = "That key does not sign in to this cluster account (keys limited with command=, from= or cert-authority do not count)."
+    user = User.query.filter(User.unix_username == username, User.unix_linked_at.isnot(None)).first()
+    if user is None or not user.active:
+        raise sshsig.SignatureError(refused)  # same answer as a wrong key: names cannot be probed
+    try:
+        with hpc.client_for(user) as client:
+            entries = client.keys()
+    except hpc.HpcError as exc:
+        current_app.logger.warning("SSH sign-in: cannot read the keys of %s: %s", username, exc)
+        raise sshsig.SignatureError("DAGonWeb cannot reach your cluster account right now.") from exc
+    for entry in entries:
+        if sshsig.key_blob(str(entry.get("key") or "")) == signature.public_key and sshsig.usable_authorized_key(str(entry.get("options") or "")):
+            return user
+    raise sshsig.SignatureError(refused)
 
 
 @bp.route("/register", methods=["GET", "POST"])

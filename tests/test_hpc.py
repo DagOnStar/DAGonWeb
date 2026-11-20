@@ -6,16 +6,21 @@ command, with ``SSH_ORIGINAL_COMMAND`` set, exactly as sshd would.
 """
 from __future__ import annotations
 
+import io
 import json
 import os
+import threading
+import time
+import zipfile
 import pwd
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from app import create_app, hpc, privacy, seed_defaults, settings
+from app import create_app, hpc, privacy, seed_defaults, settings, sshsig
 from app.config import TestConfig
 from app.executor.dispatch import run_job
 from app.executor.remote import build_run_spec
@@ -70,7 +75,10 @@ def cluster(tmp_path):
 
 @pytest.fixture()
 def app(tmp_path, cluster):
-    application = create_app(TestConfig)
+    # A file database: the run follower and the web requests use separate
+    # threads, and the shared in-memory connection is not thread-safe.
+    config = type("HpcTestConfig", (TestConfig,), {"SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path / 'dagonweb.db'}"})
+    application = create_app(config)
     application.config["DAGON_INI_PATH"] = str(tmp_path / "dagon.ini")
     application.config["HPC_TRANSPORT_FACTORY"] = cluster.factory
     application.instance_path = str(tmp_path / "instance")
@@ -247,7 +255,7 @@ def test_templates_run_on_the_cluster_as_the_user(app, cluster, template, tmp_pa
         assert all(Path(task_run.scratch_path).parent == Path(run.scratch_path) for task_run in run.task_runs)
         # Nothing was executed inside DAGonWeb's own scratch directory.
         assert not (tmp_path / "scratch" / f"workflow-{workflow.id}").exists()
-        assert all(command.split()[0] in {"ping", "submit", "status"} for command in cluster.commands)
+        assert all(command.split()[0] in {"ping", "submit", "status", "ls", "get"} for command in cluster.commands)
 
 
 def test_cluster_run_files_are_browsed_and_downloaded_through_the_runner(app, cluster, tmp_path):
@@ -266,7 +274,9 @@ def test_cluster_run_files_are_browsed_and_downloaded_through_the_runner(app, cl
     assert download.status_code == 200 and download.data == b"HELLO\nolleh\n"
     assert client.get(f"/workflows/task-runs/{ids[2]}/file?path=../../../../etc/passwd").status_code in (400, 403)
     assert client.get(f"/workflows/task-runs/{ids[2]}/download?path=../../outside").status_code == 403
-    assert client.get(f"/workflows/task-runs/{ids[2]}/archive").status_code == 501
+    archive = client.get(f"/workflows/task-runs/{ids[2]}/archive")
+    assert archive.status_code == 200
+    assert zipfile.ZipFile(io.BytesIO(archive.data)).read("result.txt") == b"HELLO\nolleh\n"
     # Other users cannot see the files.
     with app.app_context():
         make_user("other@example.org")
@@ -329,17 +339,190 @@ def test_an_admin_runs_someone_elses_workflow_as_their_own_account(app, cluster)
         assert run.unix_username == admin.unix_username
 
 
-def test_upload_and_form_tasks_are_refused_on_the_cluster(app, cluster):
+def start_in_background(app, workflow_id: int, run_id: int) -> threading.Thread:
+    def target() -> None:
+        with app.app_context():
+            run_job(workflow_id, run_id)
+
+    thread = threading.Thread(target=target, daemon=True)  # a failed test must not keep pytest alive
+    thread.start()
+    return thread
+
+
+def wait_for(app, run_id: int, predicate, timeout: float = 60):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with app.app_context():
+            run = db.session.get(WorkflowRun, run_id)
+            if predicate(run):
+                return
+        time.sleep(0.2)
+    raise AssertionError("timed out waiting for the run")
+
+
+@pytest.mark.parametrize("template", ["upload", "form"])
+def test_upload_and_form_inputs_reach_the_cluster_run(app, cluster, template, tmp_path):
     with app.app_context():
-        link(cluster)
-        workflow = new_workflow("Interactive", template="upload")
-        workflow_id = workflow.id
-        with pytest.raises(ValueError, match="Upload and Form"):
-            build_run_spec(workflow, "/cluster/run_1", "python3")
-    response = login(app).post(f"/workflows/{workflow_id}/run", data={})
-    assert response.status_code == 302
+        user = link(cluster)
+        workflow = new_workflow(f"Interactive_{template}", template=template)
+        run = WorkflowRun(workflow_id=workflow.id, user_id=user.id, status="pending", scratch_path="", log="", unix_username=user.unix_username)
+        db.session.add(run)
+        db.session.commit()
+        workflow_id, run_id = workflow.id, run.id
+        waiting = next(task.name for task in workflow.tasks if task.normalized_task_type == template)
+    thread = start_in_background(app, workflow_id, run_id)
+    client = login(app)
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        interactions = client.get(f"/workflows/{workflow_id}/runs/{run_id}/status").get_json()["interactions"]
+        if interactions:
+            break
+        time.sleep(0.2)
+    assert interactions and interactions[0]["task"] == waiting
+    # Another user (even an administrator) cannot write into this user's run.
     with app.app_context():
-        assert WorkflowRun.query.count() == 0
+        other = make_user("other-admin@example.org")
+        other.roles = Role.query.filter(Role.name == "admin").all()
+        db.session.commit()
+    assert login(app, "other-admin@example.org").post(f"/workflows/runs/{run_id}/interact/{waiting}", json={}).status_code == 403
+    if template == "upload":
+        response = client.post(f"/workflows/runs/{run_id}/interact/{waiting}", data={"files": (io.BytesIO(b"a,b\n1,2\n3,4\n"), "data.csv")}, content_type="multipart/form-data")
+    else:
+        response = client.post(f"/workflows/runs/{run_id}/interact/{waiting}", json={"threshold": "0.75", "label": "cluster"})
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert client.post(f"/workflows/runs/{run_id}/interact/{waiting}", json={}).status_code == 409
+    thread.join(timeout=120)
+    with app.app_context():
+        run = db.session.get(WorkflowRun, run_id)
+        assert run.status == "success", run.log
+        assert f"Input for {waiting} provided" in run.log
+        assert (tmp_path / "cluster" / f"run_{run_id}" / "_dagonweb" / "data" / waiting / ".ready").is_file()
+
+
+def test_table_chart_and_download_results_are_shown_for_cluster_runs(app, cluster):
+    with app.app_context():
+        user = link(cluster)
+        results = {}
+        for template in ("table", "chart", "download"):
+            workflow = new_workflow(f"Results_{template}", template=template)
+            run = start(workflow, user)
+            assert run.status == "success", run.log
+            results[template] = (workflow.id, run.id)
+    client = login(app)
+    kinds = set()
+    for template, (workflow_id, run_id) in results.items():
+        commands_before = len(cluster.commands)
+        status = client.get(f"/workflows/{workflow_id}/runs/{run_id}/status").get_json()
+        assert len(cluster.commands) == commands_before  # status polls never call the cluster
+        for item in status["results"]:
+            kinds.add(item["kind"])
+            if item["kind"] in ("table", "chart"):
+                assert item["data"]
+            if item["kind"] == "download":
+                assert client.get(item["url"]).status_code == 200
+    assert {"table", "chart", "download"} <= kinds
+
+
+def test_fair_exports_are_recorded_on_the_cluster(app, cluster):
+    with app.app_context():
+        user = link(cluster)
+        workflow = new_workflow("FairCluster", template="batch")
+        workflow.fair_profile = {"enabled": True, "title": "FAIR on the cluster", "creators": [{"name": "Ada"}], "license": "CC-BY-4.0", "access_policy": "public"}
+        db.session.commit()
+        run = start(workflow, user)
+        assert run.status == "success", run.log
+        fair = run.remote_meta.get("fair")
+        assert fair and "run.json" in {item["name"] for item in fair["files"]}
+        workflow_id, run_id = workflow.id, run.id
+    response = login(app).get(f"/workflows/{workflow_id}/runs/{run_id}/fair/run.json")
+    assert response.status_code == 200 and json.loads(response.data)
+
+
+def test_an_orphaned_cluster_run_is_picked_up_again(app, cluster):
+    """A web restart loses the following thread; the next status poll reconnects."""
+    with app.app_context():
+        user = link(cluster)
+        workflow = new_workflow("Orphan", document={"name": "Orphan", "tasks": {
+            "slow": {"name": "slow", "type": "batch", "dagonweb": {"config": {"command": "sleep 2; echo done > done.txt"}}}}})
+        run = WorkflowRun(workflow_id=workflow.id, user_id=user.id, status="pending", scratch_path="", log="", unix_username=user.unix_username)
+        db.session.add(run)
+        db.session.commit()
+        workflow_id, run_id = workflow.id, run.id
+        # Submit, then "crash": nobody follows the run any more.
+        from app.executor import remote
+
+        original = remote.follow
+        remote.follow = lambda client, run_id: None
+        try:
+            run_job(workflow_id, run_id)
+        finally:
+            remote.follow = original
+        run = db.session.get(WorkflowRun, run_id)
+        assert run.status == "running"
+        run.monitor_heartbeat = None
+        db.session.commit()
+    client = login(app)
+    client.get(f"/workflows/{workflow_id}/runs/{run_id}/status")
+    # A second poll must not start a second follower.
+    with app.app_context():
+        assert not remote.claim(run_id)
+    wait_for(app, run_id, lambda run: run.status != "running")
+    with app.app_context():
+        run = db.session.get(WorkflowRun, run_id)
+        assert run.status == "success", run.log
+        assert "Reconnected to the run on the cluster." in run.log
+        assert run.log.count("Task slow completed.") == 1
+        assert run.monitor_heartbeat is None
+
+
+def test_the_orchestrator_can_run_as_a_slurm_job(app, cluster, tmp_path, monkeypatch):
+    """Fake sbatch/squeue/scancel: sbatch runs --wrap in the background."""
+    bin_dir = tmp_path / "slurm-bin"
+    bin_dir.mkdir()
+    jobs = tmp_path / "jobs"
+    jobs.mkdir()
+    (bin_dir / "sbatch").write_text(f"""#!{sys.executable}
+import subprocess, sys, pathlib
+args = sys.argv[1:]
+wrap = args[args.index("--wrap") + 1]
+output = next(a.split("=", 1)[1] for a in args if a.startswith("--output="))
+chdir = next(a.split("=", 1)[1] for a in args if a.startswith("--chdir="))
+pathlib.Path("{jobs}/args").write_text("\\n".join(args))
+job = str(len(list(pathlib.Path("{jobs}").glob("*.pid"))) + 4242)
+p = subprocess.Popen(["sh", "-c", wrap], cwd=chdir, stdout=open(output, "ab"), stderr=subprocess.STDOUT, start_new_session=True)
+pathlib.Path("{jobs}/" + job + ".pid").write_text(str(p.pid))
+print(job)
+""")
+    (bin_dir / "squeue").write_text(f"""#!{sys.executable}
+import os, sys, pathlib
+job = sys.argv[sys.argv.index("-j") + 1]
+pid = int(pathlib.Path("{jobs}/" + job + ".pid").read_text())
+import subprocess
+state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+print("" if not state or state.startswith("Z") else "RUNNING")
+""")
+    (bin_dir / "scancel").write_text("#!/bin/sh\nexit 0\n")
+    for tool in ("sbatch", "squeue", "scancel"):
+        (bin_dir / tool).chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    with app.app_context():
+        settings.set_value("hpc_orchestrator", "slurm")
+        settings.set_value("hpc_sbatch_options", "--time=01:00:00 --partition=service")
+        db.session.commit()
+        user = link(cluster)
+        workflow = new_workflow("SlurmOrchestrator", template="batch")
+        run = start(workflow, user)
+        assert run.status == "success", run.log
+        assert "Waiting in the Slurm queue as job 4242." in run.log and "orchestrator on Slurm" in run.log
+        sbatch_args = (jobs / "args").read_text().splitlines()
+        assert "--time=01:00:00" in sbatch_args and "--partition=service" in sbatch_args and "--job-name=dagonweb-run-%d" % run.id in sbatch_args
+
+
+def test_sbatch_options_are_validated(app):
+    with app.app_context():
+        with pytest.raises(ValueError, match="long options"):
+            settings.validate(settings.DEFINITIONS["hpc_sbatch_options"], "-p debug")
+        assert settings.validate(settings.DEFINITIONS["hpc_sbatch_options"], "--partition=debug --time=1:00:00")
 
 
 def test_task_paths_cannot_escape_the_task_directory(app):
@@ -430,3 +613,115 @@ def test_cluster_account_is_exported_without_the_private_key(app, cluster):
         data = privacy.export_user_data(user)
         assert data["account"]["cluster_account"]["unix_username"] == UNIX_USER
         assert "PRIVATE" not in json.dumps(data) and user.unix_private_key not in json.dumps(data)
+
+
+# ---------------------------------------------------------------- signing in with an SSH key
+
+needs_ssh_keygen = pytest.mark.skipif(not shutil.which("ssh-keygen"), reason="ssh-keygen is not installed")
+
+
+def ssh_key(tmp_path: Path, kind: str = "ed25519") -> tuple[Path, str]:
+    path = tmp_path / f"id_{kind}"
+    extra = ["-b", "3072"] if kind == "rsa" else []
+    subprocess.run(["ssh-keygen", "-q", "-t", kind, *extra, "-N", "", "-C", "me@laptop", "-f", str(path)], check=True)
+    return path, path.with_suffix(".pub").read_text().strip()
+
+
+def ssh_sign(key: Path, message: bytes, namespace: str = sshsig.NAMESPACE) -> str:
+    done = subprocess.run(["ssh-keygen", "-Y", "sign", "-n", namespace, "-f", str(key)], input=message, capture_output=True, check=True)
+    return done.stdout.decode()
+
+
+@needs_ssh_keygen
+@pytest.mark.parametrize("kind", ["ed25519", "ecdsa", "rsa"])
+def test_openssh_signatures_are_verified(tmp_path, kind):
+    key, public = ssh_key(tmp_path, kind)
+    armored = ssh_sign(key, b"challenge")
+    signature = sshsig.parse(armored)
+    assert signature.public_key == sshsig.key_blob(public)
+    sshsig.verify(signature, b"challenge")
+    with pytest.raises(sshsig.SignatureError, match="does not match"):
+        sshsig.verify(signature, b"another challenge")
+    with pytest.raises(sshsig.SignatureError, match="-n dagonweb-login"):
+        sshsig.verify(sshsig.parse(ssh_sign(key, b"challenge", "file")), b"challenge")
+    with pytest.raises(sshsig.SignatureError):
+        sshsig.parse(armored.replace("SIGNATURE-----\n", "SIGNATURE-----\nAAAA", 1))
+    with pytest.raises(sshsig.SignatureError, match="whole signature"):
+        sshsig.parse("ssh-ed25519 AAAA")
+
+
+def ssh_login_setup(app, cluster, tmp_path, line: str) -> None:
+    """Link the account and put ``line`` (plus the DAGonWeb key) in the runner's authorized_keys."""
+    authorized = tmp_path / "authorized_keys"
+    config = json.loads(cluster.config.read_text())
+    cluster.config.write_text(json.dumps({**config, "authorized_keys_files": [str(authorized)]}), encoding="utf-8")
+    with app.app_context():
+        user = link(cluster)
+        authorized.write_text(f"# my keys\n{hpc.authorized_keys_line(user)}\n{line}\n", encoding="utf-8")
+        settings.set_value("hpc_ssh_login_enabled", True)
+        db.session.commit()
+
+
+def challenge_for(client, username: str = UNIX_USER) -> str:
+    assert client.post("/login/ssh", data={"username": username}).status_code == 302
+    with client.session_transaction() as session:
+        return session["ssh_login_challenge"]["challenge"]
+
+
+@needs_ssh_keygen
+def test_users_sign_in_with_a_key_from_their_authorized_keys(app, cluster, tmp_path):
+    key, public = ssh_key(tmp_path)
+    ssh_login_setup(app, cluster, tmp_path, public)
+    client = app.test_client()
+    assert "Sign in with your cluster SSH key" in client.get("/login").get_data(as_text=True)
+    challenge = challenge_for(client)
+    assert UNIX_USER in challenge and "localhost" in challenge
+    page = client.get("/login/ssh/sign").get_data(as_text=True)
+    assert challenge in page and "ssh-keygen -Y sign -n dagonweb-login" in page
+    signature = ssh_sign(key, challenge.encode())
+    response = client.post("/login/ssh/sign", data={"signature": signature})
+    assert response.status_code == 302 and "/login" not in response.headers["Location"]
+    with client.session_transaction() as session:
+        assert session.get("_user_id")
+    with app.app_context():
+        assert AuditLog.query.filter_by(action="auth.login", detail="sshsig").count() == 1
+    # A challenge works once: it is gone from the session after any attempt.
+    with client.session_transaction() as session:
+        assert "ssh_login_challenge" not in session
+    # An expired challenge is refused even with a good signature.
+    replay = app.test_client()
+    with replay.session_transaction() as session:
+        session["ssh_login_challenge"] = {"username": UNIX_USER, "challenge": challenge, "expires": 0}
+    assert "/login/ssh" in replay.post("/login/ssh/sign", data={"signature": signature}).headers["Location"]
+    with replay.session_transaction() as session:
+        assert "_user_id" not in session and "ssh_login_challenge" not in session
+
+
+@needs_ssh_keygen
+@pytest.mark.parametrize("case", ["restricted", "missing", "other-user", "echo"])
+def test_ssh_sign_in_refusals(app, cluster, tmp_path, case):
+    key, public = ssh_key(tmp_path)
+    (tmp_path / "other").mkdir()
+    _, other_public = ssh_key(tmp_path / "other")
+    line = {"restricted": f'command="/bin/true" {public}', "missing": other_public, "other-user": public, "echo": public}[case]
+    ssh_login_setup(app, cluster, tmp_path, line)
+    client = app.test_client()
+    username = "someone" if case == "other-user" else UNIX_USER
+    challenge = challenge_for(client, username)
+    message = challenge.encode() + (b"\n" if case == "echo" else b"")
+    response = client.post("/login/ssh/sign", data={"signature": ssh_sign(key, message)}, follow_redirects=True)
+    with client.session_transaction() as session:
+        signed_in = bool(session.get("_user_id"))
+    if case == "echo":  # signed with `echo`, so with a trailing newline: accepted too
+        assert signed_in
+        return
+    assert not signed_in
+    assert "does not sign in to this cluster account" in response.get_data(as_text=True)
+    with app.app_context():
+        assert AuditLog.query.filter_by(action="auth.login_failed").count() == 1
+
+
+def test_ssh_sign_in_is_off_by_default(app):
+    client = app.test_client()
+    assert client.get("/login/ssh").status_code == 404
+    assert "cluster SSH key" not in client.get("/login").get_data(as_text=True)

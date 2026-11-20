@@ -65,7 +65,7 @@ flask --app wsgi worker            # add --burst to exit when the queue is empty
 docker compose -f docker-compose.yml -f docker-compose.hpc.yml up --build -d
 ```
 
-Every run executes over SSH as the submitter's own cluster account through `dagonweb-runner`; nothing runs in the container. Install the runner on the login node, set `HPC_KEY_SECRET` in `.env` and pin the host key in **Administration → HPC cluster**: see [hpc.md](hpc.md).
+Every run executes over SSH as the submitter's own cluster account through `dagonweb-runner`; nothing runs in the container. Install the runner on the login node, set `HPC_KEY_SECRET` in `.env` and pin the host key in **Administration → HPC cluster**: see [hpc.md](hpc.md). After an upgrade or restart, `flask --app wsgi hpc-reattach` reconnects to the runs that are still active on the cluster (opening a run page does the same for that run).
 
 ## Container entrypoint
 

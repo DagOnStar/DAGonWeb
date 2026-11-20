@@ -347,8 +347,30 @@ class WorkflowRun(TimestampMixin, db.Model):
     # executes as (always the submitter's own), and ``scratch_path`` is then
     # a path on the cluster, reached only through ``dagonweb-runner``.
     unix_username = db.Column(db.String(64))
+    # Cluster runs: what DAGonWeb already read from the runner (event offset,
+    # inputs provided, fetched results and FAIR exports), and when a process
+    # last followed the run, so another process can pick it up after a restart.
+    remote_meta_json = db.Column(db.Text)
+    monitor_heartbeat = db.Column(db.DateTime)
     workflow = db.relationship("Workflow", backref=db.backref("runs", cascade="all, delete-orphan", lazy="dynamic"))
     user = db.relationship("User")
+
+    @property
+    def remote_meta(self) -> dict[str, Any]:
+        try:
+            value = json.loads(self.remote_meta_json or "{}")
+        except json.JSONDecodeError:
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    @remote_meta.setter
+    def remote_meta(self, value: dict[str, Any]) -> None:
+        self.remote_meta_json = json.dumps(value)
+
+    def update_remote_meta(self, **values: Any) -> None:
+        meta = self.remote_meta
+        meta.update(values)
+        self.remote_meta = meta
 
 class TaskRun(TimestampMixin, db.Model):
     __tablename__ = "task_runs"

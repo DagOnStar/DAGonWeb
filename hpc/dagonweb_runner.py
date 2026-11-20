@@ -27,7 +27,14 @@ Verbs (one JSON document on stdout unless noted)::
     cancel <run>                 stop a running run
     ls <run> [<path>]            list a directory of the run
     get <run> <path> [<max>]     raw file bytes on stdout
+    archive <run> [<path>] [<max>]  ZIP of a run folder on stdout
+    put <run> <path>             write stdin to a file below _dagonweb/data/ (interactive inputs)
     delete <run>                 remove the run directory
+    keys                         the user's own authorized keys (for SSH-signature sign-in)
+
+The DAGonStar orchestrator runs detached on the login node, or, with
+``orchestrator: slurm`` (in the run spec or forced in runner.json), as a
+small Slurm job submitted with ``sbatch``.
 
 The module uses the standard library only (plus DAGonStar for ``submit``),
 so it can be copied to the cluster without the rest of DAGonWeb.
@@ -45,18 +52,24 @@ import subprocess
 import sys
 import threading
 import venv
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-RUNNER_VERSION = "1"
+RUNNER_VERSION = "2"
 CONFIG_FILE = Path(os.environ.get("DAGONWEB_RUNNER_CONFIG", "/etc/dagonweb/runner.json"))
-REMOTE_VERBS = {"ping", "submit", "status", "cancel", "ls", "get", "delete"}
+REMOTE_VERBS = {"ping", "submit", "status", "cancel", "ls", "get", "archive", "put", "delete", "keys"}
 RUN_ID = re.compile(r"^[0-9]{1,12}$")
 TASK_NAME = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 MAX_SPEC_BYTES = 20 * 1024 * 1024
 MAX_EVENTS_BYTES = 1024 * 1024
 DEFAULT_MAX_GET = 1024 * 1024 * 1024
+DEFAULT_MAX_PUT = 1024 * 1024 * 1024
+DATA_DIR = ("_dagonweb", "data")
+ACTIVE_STATES = {"starting", "queued", "running"}
+SLURM_DONE = {"", "COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "PREEMPTED", "BOOT_FAIL", "DEADLINE"}
+KEY_TYPES = ("ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "sk-ssh-ed25519@openssh.com", "sk-ecdsa-sha2-nistp256@openssh.com")
 STATE_DIR = "_dagonweb"
 EVENTS = "events.jsonl"
 STATE = "state.json"
@@ -173,6 +186,43 @@ def alive(pid: Any) -> bool:
     return True
 
 
+def job_alive(job_id: Any) -> bool:
+    """Whether a Slurm job is still queued or running."""
+    if not str(job_id).isdigit():
+        return False
+    try:
+        done = subprocess.run(["squeue", "-h", "-j", str(job_id), "-o", "%T"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return True  # cannot tell: never report a live job as lost
+    return done.returncode == 0 and done.stdout.strip().upper() not in SLURM_DONE
+
+
+def is_active(state: dict[str, Any]) -> bool:
+    if state.get("state") not in ACTIVE_STATES:
+        return False
+    if state.get("job_id"):
+        return job_alive(state["job_id"])
+    return alive(state.get("pid"))
+
+
+def stop(state: dict[str, Any]) -> None:
+    if state.get("job_id"):
+        subprocess.run(["scancel", str(state["job_id"])], capture_output=True, timeout=60)
+    elif alive(state.get("pid")):
+        os.killpg(state["pid"], signal.SIGTERM)
+
+
+def orchestrator(config: dict[str, Any], spec: dict[str, Any]) -> tuple[str, list[str]]:
+    """Where the DAGonStar orchestrator runs, and the extra sbatch options."""
+    requested = spec.get("orchestrator") if isinstance(spec.get("orchestrator"), dict) else {}
+    mode = config.get("orchestrator") if config.get("orchestrator") in ("login", "slurm") else requested.get("mode")
+    options = list(config.get("sbatch_options") or []) + list(requested.get("sbatch_options") or [])
+    for option in options:
+        if not isinstance(option, str) or not option.startswith("--") or len(option) > 500 or any(char in option for char in "\0\n\r"):
+            raise RunnerError(f"Invalid sbatch option {option!r}.")
+    return ("slurm" if mode == "slurm" else "login"), options
+
+
 # ---------------------------------------------------------------- verbs
 
 
@@ -209,24 +259,33 @@ def verb_submit(base: Path, args: list[str], stdin: Any) -> dict[str, Any]:
     validate_spec(spec)
     (directory / STATE_DIR).mkdir(mode=0o700, parents=True, exist_ok=True)
     state = read_state(directory)
-    if state.get("state") == "running" and alive(state.get("pid")):
+    if is_active(state):
         raise RunnerError("This run is already running.", 16)
     if not resume and state:
         raise RunnerError("This run already exists; resume it instead.", 17)
+    mode, options = orchestrator(load_config(), spec)
     state_path(directory, SPEC).write_text(json.dumps(spec), encoding="utf-8")
     state_path(directory, EVENTS).write_text("", encoding="utf-8")
-    write_state(directory, state="starting", resume=resume, submitted_at=now(), pid=None, finished_at=None, error="")
-    log = state_path(directory, "runner.log").open("ab")
-    process = subprocess.Popen(
-        [sys.executable, "-I", str(Path(__file__).resolve()), "_execute", args[0]] + (["--resume"] if resume else []),
-        cwd=str(directory),
-        stdin=subprocess.DEVNULL,
-        stdout=log,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-        close_fds=True,
-        env={**os.environ, "DAGONWEB_RUNNER_BASE": str(base)},
-    )
+    write_state(directory, state="starting", resume=resume, submitted_at=now(), pid=None, job_id=None, finished_at=None, error="", orchestrator=mode)
+    command = [sys.executable, "-I", str(Path(__file__).resolve()), "_execute", args[0]] + (["--resume"] if resume else [])
+    environment = {**os.environ, "DAGONWEB_RUNNER_BASE": str(base)}
+    log_file = state_path(directory, "runner.log")
+    if mode == "slurm":
+        done = subprocess.run(
+            ["sbatch", "--parsable", f"--job-name=dagonweb-run-{args[0]}", f"--chdir={directory}", f"--output={log_file}", "--export=ALL", *options, "--wrap", shlex.join(command)],
+            capture_output=True, text=True, env=environment, timeout=120,
+        )
+        job_id = done.stdout.strip().split(";")[0]
+        if done.returncode or not job_id.isdigit():
+            write_state(directory, state="failed", error=f"sbatch failed: {(done.stderr or done.stdout).strip()[-2000:]}", finished_at=now())
+            raise RunnerError(f"sbatch failed: {(done.stderr or done.stdout).strip()[-2000:]}")
+        write_state(directory, state="queued", job_id=int(job_id))
+        events = EventLog(state_path(directory, EVENTS))
+        events.write(run="queued", job_id=int(job_id))
+        events.close()
+        return {"ok": True, "run_dir": str(directory), "job_id": int(job_id)}
+    log = log_file.open("ab")
+    process = subprocess.Popen(command, cwd=str(directory), stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True, env=environment)
     log.close()
     write_state(directory, pid=process.pid)
     return {"ok": True, "run_dir": str(directory), "pid": process.pid}
@@ -241,9 +300,12 @@ def verb_status(base: Path, args: list[str], stdin: Any) -> dict[str, Any]:
     if not state:
         return {"ok": True, "state": "unknown", "events": [], "offset": offset}
     current = state.get("state", "unknown")
-    if current in ("starting", "running") and state.get("pid") and not alive(state.get("pid")):
-        # Killed from outside (OOM killer, reboot, login-node limits).
-        current = "lost"
+    if current in ACTIVE_STATES and (state.get("pid") or state.get("job_id")) and not is_active(state):
+        # It may have finished a moment ago: read the state once more.
+        state = read_state(directory)
+        current = state.get("state", "unknown")
+        if current in ACTIVE_STATES:
+            current = "lost"  # killed from outside (OOM killer, reboot, scancel, limits)
     events: list[dict[str, Any]] = []
     try:
         with state_path(directory, EVENTS).open("rb") as handle:
@@ -257,7 +319,7 @@ def verb_status(base: Path, args: list[str], stdin: Any) -> dict[str, Any]:
             events.append(json.loads(line))
         except ValueError:
             continue
-    return {"ok": True, "state": current, "error": state.get("error", ""), "events": events, "offset": offset + end, "more": end < len(chunk) or len(chunk) == MAX_EVENTS_BYTES}
+    return {"ok": True, "state": current, "job_id": state.get("job_id"), "error": state.get("error", ""), "events": events, "offset": offset + end, "more": end < len(chunk) or len(chunk) == MAX_EVENTS_BYTES}
 
 
 def verb_cancel(base: Path, args: list[str], stdin: Any) -> dict[str, Any]:
@@ -265,9 +327,8 @@ def verb_cancel(base: Path, args: list[str], stdin: Any) -> dict[str, Any]:
         raise RunnerError("Usage: cancel <run>")
     directory = run_dir(base, args[0])
     state = read_state(directory)
-    pid = state.get("pid")
-    if state.get("state") in ("starting", "running") and alive(pid):
-        os.killpg(pid, signal.SIGTERM)
+    if is_active(state):
+        stop(state)
         write_state(directory, state="failed", error="Cancelled.", finished_at=now())
         return {"ok": True, "cancelled": True}
     return {"ok": True, "cancelled": False}
@@ -313,15 +374,103 @@ def verb_delete(base: Path, args: list[str], stdin: Any) -> dict[str, Any]:
     if len(args) != 1:
         raise RunnerError("Usage: delete <run>")
     directory = run_dir(base, args[0])
-    state = read_state(directory)
-    if state.get("state") in ("starting", "running") and alive(state.get("pid")):
+    if is_active(read_state(directory)):
         raise RunnerError("The run is still active.", 16)
     if directory.is_dir() and not directory.is_symlink():
         shutil.rmtree(directory)
     return {"ok": True}
 
 
-VERBS = {"ping": verb_ping, "submit": verb_submit, "status": verb_status, "cancel": verb_cancel, "ls": verb_ls, "get": verb_get, "delete": verb_delete}
+def verb_archive(base: Path, args: list[str], stdin: Any) -> None:
+    if not args or len(args) > 3:
+        raise RunnerError("Usage: archive <run> [<path>] [<max bytes>]")
+    root = run_dir(base, args[0]).resolve()
+    target = inside(root, args[1] if len(args) > 1 else "")
+    limit = int(args[2]) if len(args) == 3 and args[2].isdigit() else DEFAULT_MAX_GET
+    if not target.is_dir():
+        raise RunnerError("Path is not a directory.", 44)
+    files, total = [], 0
+    for path in sorted(target.rglob("*")):
+        resolved = path.resolve()
+        if path.is_file() and (resolved == root or root in resolved.parents):
+            files.append(path)
+            total += path.stat().st_size
+            if total > limit:
+                raise RunnerError("The folder is too large to archive.", 27)
+    with zipfile.ZipFile(sys.stdout.buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in files:
+            archive.write(path, str(path.relative_to(target)))
+    sys.stdout.buffer.flush()
+    return None
+
+
+def verb_put(base: Path, args: list[str], stdin: Any) -> dict[str, Any]:
+    """Store an interactive input (Upload/Form tasks) below ``_dagonweb/data``."""
+    if len(args) != 2:
+        raise RunnerError("Usage: put <run> <path>")
+    root = run_dir(base, args[0])
+    if not root.is_dir():
+        raise RunnerError("Unknown run.", 44)
+    data_root = (root / Path(*DATA_DIR)).resolve()
+    target = inside(root, args[1])
+    if data_root not in target.parents:
+        raise RunnerError("Inputs can only be written below _dagonweb/data/.", 13)
+    limit = int(load_config().get("max_put_bytes") or DEFAULT_MAX_PUT)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.part")
+    written = 0
+    with temporary.open("wb") as handle:
+        while chunk := stdin.read(1024 * 1024):
+            written += len(chunk)
+            if written > limit:
+                handle.close()
+                temporary.unlink()
+                raise RunnerError("The input is too large.", 27)
+            handle.write(chunk)
+    temporary.replace(target)
+    return {"ok": True, "size": written}
+
+
+def split_key_line(line: str) -> tuple[str, str] | None:
+    """Split an authorized_keys line into (options, "type base64")."""
+    line = line.strip()
+    if not line or line.startswith("#"):
+        return None
+    options, index, quoted = "", 0, False
+    if not line.startswith(KEY_TYPES):
+        while index < len(line) and (quoted or not line[index].isspace()):
+            if line[index] == '"' and (index == 0 or line[index - 1] != "\\"):
+                quoted = not quoted
+            index += 1
+        options, line = line[:index], line[index:].strip()
+    parts = line.split()
+    if len(parts) < 2 or parts[0] not in KEY_TYPES:
+        return None
+    return options, f"{parts[0]} {parts[1]}"
+
+
+def verb_keys(base: Path, args: list[str], stdin: Any) -> dict[str, Any]:
+    """The user's own public keys, so DAGonWeb can check an SSH signature."""
+    if args:
+        raise RunnerError("Usage: keys")
+    config = load_config()
+    files = config.get("authorized_keys_files") or ["~/.ssh/authorized_keys", "~/.ssh/authorized_keys2"]
+    home, user = str(Path.home()), username()
+    keys = []
+    for pattern in files:
+        path = Path(os.path.expanduser(str(pattern).replace("%h", home).replace("%u", user).replace("%%", "%")))
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")[:1_000_000]
+        except OSError:
+            continue
+        for raw in content.splitlines():
+            parsed = split_key_line(raw)
+            if parsed:
+                keys.append({"options": parsed[0], "key": parsed[1]})
+    return {"ok": True, "keys": keys[:500]}
+
+
+VERBS = {"ping": verb_ping, "submit": verb_submit, "status": verb_status, "cancel": verb_cancel, "ls": verb_ls, "get": verb_get, "archive": verb_archive, "put": verb_put, "delete": verb_delete, "keys": verb_keys}
 
 
 # ---------------------------------------------------------------- run specification
@@ -432,6 +581,27 @@ def prepare_native(spec: dict[str, Any], directory: Path) -> tuple[Path | None, 
     return (module_root if has_modules else None), overrides
 
 
+def enable_fair(runtime: Any, spec: dict[str, Any], directory: Path) -> None:
+    """Record FAIR provenance with DAGonStar when the workflow asks for it."""
+    profile = spec.get("fair")
+    if not isinstance(profile, dict) or not profile.get("enabled"):
+        return
+    from dagon.fair import AccessPolicy, Agent, FairProfile
+
+    policy = profile.get("access_policy") or "local"
+    runtime.enable_fair(FairProfile(
+        title=profile.get("title") or spec["name"],
+        description=profile.get("description") or "",
+        creators=[Agent(name=str(name)) for name in profile.get("creators") or [] if name],
+        license=profile.get("license") or "",
+        keywords=list(profile.get("keywords") or []),
+        access_policy=AccessPolicy(metadata=policy, data=policy),
+        strict=bool(profile.get("strict")),
+        output_dir=str(directory / ".dagon" / "fair" / spec["name"]),
+        capture_environment=list(profile.get("environment_allowlist") or []) if profile.get("capture_environment") else [],
+    ))
+
+
 def execute(base: Path, run_id: str, resume: bool) -> int:
     """Run a submitted specification with DAGonStar (detached child process)."""
     directory = run_dir(base, run_id)
@@ -471,6 +641,7 @@ def execute(base: Path, run_id: str, resume: bool) -> int:
         for target, source in spec.get("explicit", []):
             tasks[target].add_dependency_to(tasks[source])
         runtime.make_dependencies()
+        enable_fair(runtime, spec, directory)
         capture = FailureCapture(runtime.tasks)
         logging.getLogger().addHandler(capture)
         seen: dict[str, str] = {}
