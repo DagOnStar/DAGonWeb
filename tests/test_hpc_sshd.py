@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from app import create_app, hpc, seed_defaults, settings
+from app import create_app, hpc, hpc_check, seed_defaults, settings
 from app.config import TestConfig
 from app.executor.dispatch import run_job
 from app.extensions import db
@@ -44,7 +44,8 @@ def sshd(tmp_path):
     (root / "bin").mkdir(parents=True)
     subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(root / "host_ed25519")], check=True)
     (root / "authorized_keys").touch(mode=0o600)
-    (root / "runner.json").write_text(json.dumps({"base": str(root / "cluster"), "min_uid": 0}), encoding="utf-8")
+    # authorized_keys_files matches AuthorizedKeysFile below, as docs/hpc.md asks sites to do.
+    (root / "runner.json").write_text(json.dumps({"base": str(root / "cluster"), "min_uid": 0, "authorized_keys_files": [str(root / "authorized_keys")]}), encoding="utf-8")
     runner = root / "bin" / "dagonweb-runner"
     runner.write_text(f'#!/bin/sh\nDAGONWEB_RUNNER_CONFIG={root / "runner.json"} exec {sys.executable} -I {RUNNER} "$@"\n', encoding="utf-8")
     runner.chmod(0o755)
@@ -140,3 +141,20 @@ def test_link_run_and_files_over_real_ssh(app, sshd, tmp_path):
     assert forward.returncode != 0 and b"forwarding failed" in forward.stderr
     allowed = subprocess.run(base + ["ping"], capture_output=True, timeout=30)
     assert json.loads(allowed.stdout)["user"] == getpass.getuser()
+
+
+def test_site_check_against_real_sshd(app, sshd):
+    with app.app_context():
+        assert hpc_check.probe_host_key("127.0.0.1", sshd["port"], sshd["host_key"])[0]
+        wrong = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+        ok, detail = hpc_check.probe_host_key("127.0.0.1", sshd["port"], wrong)
+        assert not ok and "different host key" in detail
+        user = User.query.filter_by(email="admin@example.org").one()
+        hpc.start_link(user, getpass.getuser())
+        (sshd["root"] / "authorized_keys").write_text(hpc.authorized_keys_line(user) + "\n", encoding="utf-8")
+        hpc.verify_link(user)
+        db.session.commit()
+    result = app.test_cli_runner().invoke(args=["hpc-check", "--email", "admin@example.org", "--run"])
+    assert result.exit_code == 0, result.output
+    assert "[  ok] A test workflow runs on the cluster as the user" in result.output
+    assert "[  ok] The runner reads the user's authorized_keys (1 key(s))" in result.output

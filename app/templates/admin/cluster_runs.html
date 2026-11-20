@@ -1,0 +1,41 @@
+{% extends 'admin/_layout.html' %}
+{% block admin_content %}
+<div class="page-header"><div><h1 class="h3">Cluster runs</h1><p class="page-subtitle">Active runs on the HPC cluster and the DAGonWeb process that follows each one. Every run executes as its submitter's own Unix account; reconnecting only resumes reading its status.</p></div>
+  {% if rows %}<form method="post" action="{{ url_for('admin.cluster_runs_reconnect') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-outline-primary btn-sm">Reconnect all stale runs</button></form>{% endif %}</div>
+{% if not hpc_enabled %}<div class="alert alert-info small" role="note">HPC cluster mode is off. Turn it on in <a class="alert-link" href="{{ url_for('admin.settings_section', section='hpc') }}">HPC cluster</a> settings.</div>{% endif %}
+<section class="card mb-3" aria-labelledby="clusterCheckTitle"><div class="card-body">
+  <div class="d-flex flex-wrap align-items-center gap-2"><h2 class="h6 mb-0 me-auto" id="clusterCheckTitle">Connection check</h2>
+    <form method="post" action="{{ url_for('admin.cluster_runs_check') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-outline-secondary btn-sm">Check the cluster connection</button></form></div>
+  {% if checks %}
+  <p class="small mt-2 mb-2" role="status">{{ checks|length }} check(s): {{ totals.failed }} failed, {{ totals.warnings }} warning(s).</p>
+  <ul class="list-unstyled small mb-0 cluster-checks">
+    {% for check in checks %}<li class="mb-1"><span class="badge text-bg-{{ {'ok': 'success', 'FAIL': 'danger', 'warn': 'warning'}[check.mark] }}">{{ check.mark }}</span> {{ check.label }}{% if check.detail %} <span class="text-body-secondary text-break">— {{ check.detail }}</span>{% endif %}</li>{% endfor %}
+  </ul>
+  {% else %}
+  <p class="small text-body-secondary mt-2 mb-0">Checks the pinned host key, then the runner, DAGonStar and Slurm through your own linked cluster account, if you have one. For a full test run as a user, use <code>flask --app wsgi hpc-check --email &lt;user&gt; --run</code> on the server.</p>
+  {% endif %}
+</div></section>
+<p class="small text-body-secondary">A run is <strong>stale</strong> when no process has written its heartbeat for {{ stale_seconds }} seconds, for example after a restart. Opening its run page, this page's buttons or <code>flask --app wsgi hpc-reattach</code> reconnect it.</p>
+<div class="card"><div class="table-responsive"><table class="table table-sm mb-0 small align-middle">
+  <caption class="visually-hidden">Active cluster runs</caption>
+  <thead><tr><th scope="col">Run</th><th scope="col">Submitted by</th><th scope="col">Unix account</th><th scope="col">Status</th><th scope="col">Started (UTC)</th><th scope="col">Follower</th><th scope="col">Slurm job</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+  <tbody>
+  {% for row in rows %}{% set run = row.run %}
+    <tr>
+      <td><a href="{{ url_for('workflows.run_detail', workflow_id=run.workflow_id, run_id=run.id) }}">{{ run.workflow.name }} #{{ run.id }}</a></td>
+      <td class="text-break">{{ run.user.email if run.user else '—' }}</td>
+      <td><code>{{ run.unix_username }}</code></td>
+      <td><span class="badge text-bg-{{ 'info' if run.status == 'running' else 'secondary' }}">{{ run.status }}</span></td>
+      <td class="text-nowrap">{{ run.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td>
+        {% if row.follower == 'following' %}<span class="badge text-bg-success">following</span> <span class="text-body-secondary">{{ row.age|round|int }} s ago</span>
+        {% elif row.follower == 'stale' %}<span class="badge text-bg-warning">stale</span> <span class="text-body-secondary">{% if row.age is not none %}{{ (row.age / 60)|round|int }} min ago{% else %}never{% endif %}</span>
+        {% else %}<span class="badge text-bg-secondary">waiting to start</span>{% endif %}
+        {% if row.error %}<div class="text-danger-emphasis text-break">{{ row.error|truncate(160) }}</div>{% endif %}
+      </td>
+      <td>{{ row.job_id or 'login node' }}</td>
+      <td class="text-end">{% if row.follower == 'stale' %}<form method="post" action="{{ url_for('admin.cluster_runs_reconnect') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="run_id" value="{{ run.id }}"><button type="submit" class="btn btn-outline-primary btn-sm" aria-label="Reconnect run {{ run.id }}">Reconnect</button></form>{% endif %}</td>
+    </tr>
+  {% else %}<tr><td colspan="8" class="text-body-secondary">No active cluster runs.</td></tr>{% endfor %}
+  </tbody></table></div></div>
+{% endblock %}

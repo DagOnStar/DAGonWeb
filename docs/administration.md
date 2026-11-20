@@ -16,6 +16,7 @@ Administrators open the panel from the navbar (**Admin**). The sidebar has these
 | **dagon.ini** | The global DAGonStar configuration (guided form and raw view). |
 | **Users** | Create, edit, search, disable and delete accounts; assign roles; unlink an SSO identity; export a user's data or erase the account for GDPR requests. |
 | **Roles** | Create roles and choose their permissions. |
+| **Cluster runs** | HPC cluster mode: active cluster runs, which process follows each one, **Reconnect** for stale runs, and a connection check. See [hpc.md](hpc.md#checking-a-cluster-set-up). |
 | **Audit log** | Sign-ins, failed sign-ins, user/role/settings changes, imports and runs, with filters and CSV export. |
 
 Settings are stored in the `settings` table. Any setting can be pinned from the environment with `DAGONWEB_<KEY>` (see [configuration.md](configuration.md)); a pinned setting is shown read-only in the panel. Secrets (client secrets, SMTP password, LLM API key) are never sent back to the browser: leave the field empty to keep the stored value, or tick **Clear** to remove it.

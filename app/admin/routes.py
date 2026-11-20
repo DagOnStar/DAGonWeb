@@ -243,6 +243,74 @@ def storage_cleanup():
     return redirect(url_for("admin.settings_section", section="storage"))
 
 
+# ---------------------------------------------------------------- cluster runs
+
+
+def cluster_run_rows() -> list[dict]:
+    """Active cluster runs and who follows them (heartbeat age)."""
+    from ..executor import remote
+
+    now, stale = remote.utcnow(), remote.stale_after()
+    runs = (WorkflowRun.query.filter(WorkflowRun.unix_username.isnot(None), WorkflowRun.status.in_(ACTIVE_RUN_STATUSES))
+            .order_by(WorkflowRun.created_at.desc()).limit(500).all())
+    rows = []
+    for run in runs:
+        heartbeat = run.monitor_heartbeat
+        age = (now - heartbeat).total_seconds() if heartbeat else None
+        if run.status != "running" or not run.scratch_path:
+            follower = "waiting"
+        elif age is not None and age < stale.total_seconds():
+            follower = "following"
+        else:
+            follower = "stale"
+        meta = run.remote_meta
+        rows.append({"run": run, "follower": follower, "age": age, "job_id": meta.get("job_id") or "",
+                     "error": meta.get("reconnect_error") or ""})
+    return rows
+
+
+@bp.get("/cluster-runs")
+@admin_required
+def cluster_runs():
+    from ..executor import remote
+
+    return render_template("admin/cluster_runs.html", rows=cluster_run_rows(), hpc_enabled=settings.get("hpc_enabled"),
+                           stale_seconds=int(remote.stale_after().total_seconds()))
+
+
+@bp.post("/cluster-runs/check")
+@admin_required
+def cluster_runs_check():
+    """Site checks, plus the administrator's own linked account (no test run)."""
+    from ..executor import remote
+    from ..hpc_check import all_checks, summary
+
+    checks = all_checks(current_user.email if current_user.unix_linked else None)
+    totals = summary(checks)
+    audit.commit("admin.cluster_check", "hpc", f"{totals['failed']} failed, {totals['warnings']} warnings")
+    return render_template("admin/cluster_runs.html", rows=cluster_run_rows(), hpc_enabled=settings.get("hpc_enabled"),
+                           stale_seconds=int(remote.stale_after().total_seconds()), checks=checks, totals=totals)
+
+
+@bp.post("/cluster-runs/reconnect")
+@admin_required
+def cluster_runs_reconnect():
+    """Follow stale cluster runs again (as their submitters' accounts, read-only polling)."""
+    from ..executor import remote
+
+    run_id = request.form.get("run_id", type=int)
+    if run_id:
+        run = db.get_or_404(WorkflowRun, run_id)
+        started = remote.ensure_followed(run)
+        audit.commit("admin.cluster_reconnect", f"run {run_id}", "reconnected" if started else "already followed")
+        flash(f"Reconnecting to run #{run_id}." if started else f"Run #{run_id} is already followed or not running.", "success" if started else "info")
+    else:
+        threads = remote.reattach_all()
+        audit.commit("admin.cluster_reconnect", "all", f"{len(threads)} run(s)")
+        flash(f"Reconnecting to {len(threads)} run(s)." if threads else "Every active cluster run is already followed.", "success" if threads else "info")
+    return redirect(url_for("admin.cluster_runs"))
+
+
 # ---------------------------------------------------------------- dagon.ini
 
 

@@ -43,6 +43,27 @@
       {% if current_user.unix_linked %}
       <p class="small">Your workflow runs execute on the cluster as the Unix user <strong>{{ current_user.unix_username }}</strong>, with your own files, quotas and Slurm accounting. Linked on {{ current_user.unix_linked_at.strftime('%Y-%m-%d') }}.</p>
       <p class="small">DAGonWeb signs in with a key that can only start <code>dagonweb-runner</code>: it cannot open a shell, forward ports or read files outside your DAGonWeb run folders.</p>
+      {% if hpc_enabled %}
+      <section class="cluster-info mb-3" id="clusterInfo" data-url="{{ url_for('account.cluster_info') }}" aria-labelledby="clusterInfoTitle">
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+          <h3 class="h6 mb-0" id="clusterInfoTitle">Storage and Slurm queue</h3>
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="clusterInfoRefresh">Refresh</button>
+        </div>
+        <p class="small text-body-secondary mb-2" id="clusterInfoStatus" role="status" aria-live="polite">Reading from the cluster…</p>
+        <div id="clusterInfoBody" hidden>
+          <dl class="row small mb-2" id="clusterStorage"></dl>
+          <pre class="cluster-key cluster-quota p-2 border rounded small" id="clusterQuota" tabindex="0" aria-label="Quota report" hidden></pre>
+          <div class="table-responsive" id="clusterQueueWrap" hidden>
+            <table class="table table-sm small align-middle mb-0">
+              <caption class="visually-hidden">Your Slurm jobs</caption>
+              <thead><tr><th scope="col">Job</th><th scope="col">Name</th><th scope="col">State</th><th scope="col">Elapsed</th><th scope="col">Limit</th><th scope="col">Partition</th><th scope="col">Reason / nodes</th></tr></thead>
+              <tbody id="clusterQueue"></tbody>
+            </table>
+          </div>
+          <p class="small text-body-secondary mb-0" id="clusterQueueNote"></p>
+        </div>
+      </section>
+      {% endif %}
       <form method="post" action="{{ url_for('account.cluster_unlink') }}" class="d-inline">
         {{ cluster_action.hidden_tag() }}
         <button type="submit" class="btn btn-outline-danger btn-sm">Unlink cluster account</button>
@@ -99,3 +120,4 @@
   </div>
 </div>
 {% endblock %}
+{% block scripts %}{% if hpc_enabled and current_user.unix_linked %}<script src="{{ url_for('static', filename='js/cluster-info.js') }}"></script>{% endif %}{% endblock %}

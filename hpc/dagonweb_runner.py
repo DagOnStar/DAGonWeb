@@ -57,9 +57,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-RUNNER_VERSION = "2"
+RUNNER_VERSION = "3"
 CONFIG_FILE = Path(os.environ.get("DAGONWEB_RUNNER_CONFIG", "/etc/dagonweb/runner.json"))
-REMOTE_VERBS = {"ping", "submit", "status", "cancel", "ls", "get", "archive", "put", "delete", "keys"}
+REMOTE_VERBS = {"ping", "submit", "status", "cancel", "ls", "get", "archive", "put", "delete", "keys", "info"}
 RUN_ID = re.compile(r"^[0-9]{1,12}$")
 TASK_NAME = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 MAX_SPEC_BYTES = 20 * 1024 * 1024
@@ -470,7 +470,92 @@ def verb_keys(base: Path, args: list[str], stdin: Any) -> dict[str, Any]:
     return {"ok": True, "keys": keys[:500]}
 
 
-VERBS = {"ping": verb_ping, "submit": verb_submit, "status": verb_status, "cancel": verb_cancel, "ls": verb_ls, "get": verb_get, "archive": verb_archive, "put": verb_put, "delete": verb_delete, "keys": verb_keys}
+INFO_SCAN_LIMIT = 200_000  # files counted for the DAGonWeb folder size
+INFO_QUEUE_LIMIT = 200
+QUEUE_FIELDS = ("id", "name", "state", "elapsed", "limit", "partition", "reason")
+
+
+def folder_usage(base: Path) -> dict[str, Any]:
+    """Bytes and run folders below the runner base, without following links."""
+    total, files, truncated = 0, 0, False
+    for root, dirs, names in os.walk(base, followlinks=False):
+        for name in names:
+            files += 1
+            if files > INFO_SCAN_LIMIT:
+                truncated = True
+                break
+            try:
+                total += os.lstat(os.path.join(root, name)).st_blocks * 512
+            except (OSError, AttributeError):
+                continue
+        if truncated:
+            break
+    runs = sum(1 for child in base.iterdir() if child.is_dir() and child.name.startswith("run_")) if base.is_dir() else 0
+    return {"bytes": total, "files": min(files, INFO_SCAN_LIMIT), "runs": runs, "truncated": truncated}
+
+
+def site_command(config: dict[str, Any], key: str) -> list[str] | None:
+    """A command from the root-owned runner.json, with %u for the user name."""
+    command = config.get(key)
+    if not command:
+        return None
+    if not isinstance(command, list) or not all(isinstance(part, str) for part in command):
+        raise RunnerError(f"{key} in the runner configuration must be a list of strings.", 70)
+    user = username()
+    return [part.replace("%u", user) for part in command]
+
+
+def run_text(command: list[str], timeout: int = 20, limit: int = 8000) -> tuple[bool, str]:
+    try:
+        done = subprocess.run(command, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+    except FileNotFoundError:
+        return False, f"{command[0]} is not installed."
+    except subprocess.TimeoutExpired:
+        return False, f"{command[0]} did not answer in {timeout} s."
+    except OSError as exc:
+        return False, str(exc)
+    output = (done.stdout or "") + ("" if done.returncode == 0 else (done.stderr or ""))
+    return done.returncode == 0, output[:limit]
+
+
+def slurm_queue(config: dict[str, Any]) -> tuple[list[dict[str, str]] | None, str]:
+    """The user's own Slurm jobs, or None when Slurm is not available."""
+    command = site_command(config, "queue_command") or ["squeue", "-h", "-u", username(), "-o", "%i|%j|%T|%M|%l|%P|%R"]
+    if not shutil.which(command[0]):
+        return None, ""
+    ok, output = run_text(command)
+    if not ok:
+        return [], output.strip()[:500]
+    jobs = []
+    for line in output.splitlines()[:INFO_QUEUE_LIMIT]:
+        parts = line.split("|")
+        if len(parts) >= len(QUEUE_FIELDS):
+            jobs.append({key: value.strip()[:200] for key, value in zip(QUEUE_FIELDS, parts)})
+    return jobs, ""
+
+
+def verb_info(base: Path, args: list[str], stdin: Any) -> dict[str, Any]:
+    """Storage and Slurm queue of the user's own account, for the account page."""
+    if args:
+        raise RunnerError("Usage: info")
+    config = load_config()
+    storage: dict[str, Any] = {}
+    try:
+        usage = shutil.disk_usage(base)
+        storage = {"total": usage.total, "used": usage.used, "free": usage.free}
+    except OSError:
+        pass
+    quota = None
+    quota_command = site_command(config, "quota_command")
+    if quota_command:
+        ok, output = run_text(quota_command)
+        quota = {"ok": ok, "text": output.strip()}
+    queue, queue_error = slurm_queue(config)
+    return {"ok": True, "user": username(), "base": str(base), "filesystem": storage, "dagonweb": folder_usage(base),
+            "quota": quota, "queue": queue, "queue_error": queue_error}
+
+
+VERBS = {"ping": verb_ping, "submit": verb_submit, "status": verb_status, "cancel": verb_cancel, "ls": verb_ls, "get": verb_get, "archive": verb_archive, "put": verb_put, "delete": verb_delete, "keys": verb_keys, "info": verb_info}
 
 
 # ---------------------------------------------------------------- run specification

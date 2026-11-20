@@ -50,7 +50,7 @@ The project targets **DAGonStar 2.9.4** (pinned in [requirements.txt](requiremen
 - **Try it without an account.** Visitors open any template in a guest playground and press **Dry run**: DAGonWeb checks the workflow and plays back how DAGonStar would execute it, stage by stage, without executing anything or storing it on the server ([docs](docs/playground.md)).
 - **GDPR-ready.** Configurable privacy notice and cookie policy, a cookie banner with equal “Accept all” / “Necessary only” choices, consent at registration and on notice changes, self-service data export and account erasure, administrator tools for data requests, and retention clean-up ([docs](docs/privacy_gdpr.md)).
 - **Accessible.** Built for WCAG 2.1 AA (EN 301 549): skip link, landmarks, keyboard alternatives to drag and drop, linked form errors, live status messages, contrast-checked themes and brand colors, reduced motion, chart data tables, and an accessibility statement ([docs](docs/accessibility.md)).
-- **HPC clusters, as the user.** Installed on a login node, DAGonWeb runs every workflow as the submitter's own Unix account. Users link the account with a restricted key in `~/.ssh/authorized_keys`, and the key can only start `dagonweb-runner`. Nothing runs in the container, and nobody can run as someone else. Upload/Form input, results, ZIP archives and FAIR exports work as for local runs; the orchestrator can run as a Slurm job, runs are picked up again after a restart, and users can sign in with a key from their own `authorized_keys` ([docs](docs/hpc.md)).
+- **HPC clusters, as the user.** Installed on a login node, DAGonWeb runs every workflow as the submitter's own Unix account. Users link the account with a restricted key in `~/.ssh/authorized_keys`, and the key can only start `dagonweb-runner`. Nothing runs in the container, and nobody can run as someone else. Upload/Form input, results, ZIP archives and FAIR exports work as for local runs; the orchestrator can run as a Slurm job, runs are picked up again after a restart, users can sign in with a key from their own `authorized_keys` and see their storage and Slurm queue, administrators see every active cluster run, and `flask hpc-check` validates a site set-up end to end ([docs](docs/hpc.md)).
 - **Scalable execution.** Runs execute in a bounded pool of threads, or, for many concurrent runs, on a **Redis queue** served by any number of workers ([docs](docs/deployment.md#redis-queue-for-many-concurrent-runs)).
 
 ## Screenshots
@@ -62,6 +62,12 @@ The project targets **DAGonStar 2.9.4** (pinned in [requirements.txt](requiremen
 The dark theme follows the operating system, or you can choose it from the navbar menu:
 
 ![Run page in dark mode](docs/images/run-dark.png)
+
+On an HPC cluster ([docs](docs/hpc.md)), each user's account page shows their storage, quota and Slurm queue, and administrators can check the whole set-up from the browser:
+
+| Cluster account: storage and Slurm queue | Administration: cluster connection check |
+| --- | --- |
+| ![Cluster account card with the DAGonWeb folder, free space, the quota report and Slurm jobs](docs/images/hpc-account.png) | ![Administration cluster runs page with eleven passing connection checks](docs/images/hpc-admin.png) |
 
 ## Architecture
 
