@@ -69,6 +69,8 @@ TEMPLATE_DESCRIPTIONS = {
     "faas": "Batch → FaaS (mock provider) → Batch, with no credentials needed.",
     "iot": "A bounded IoT observation from the credential-free mock provider.",
     "agentic": "A producer and a bounded Agentic quality-control task (mock adapter).",
+    "volume": "A shared DAGonFS volume: two writers, a stream between tasks, and a destroy task that stages results out.",
+    "meta": "Batch → Meta (an external word-count engine run unmodified) → Batch.",
     "upload": "Upload a CSV on the run page, then see it as a table and a chart.",
     "form": "Fill a form on the run page; a Batch task reads the values from form.env.",
     "table": "A Batch task writes a CSV that the run page shows as a table.",
@@ -77,7 +79,7 @@ TEMPLATE_DESCRIPTIONS = {
 }
 # Templates for external back-ends enable DAGonStar portable emulation, so the
 # example runs locally until the real back-end is configured.
-EMULATED_TEMPLATES = {"slurm", "cloud", "docker", "kubernetes", "apptainer", "nomad", "llm"}
+EMULATED_TEMPLATES = {"slurm", "cloud", "docker", "kubernetes", "apptainer", "nomad", "llm", "volume"}
 AGENTIC_TEMPLATE_INI = {
     "agent_provider.fixture": {"implementation": "mock"},
     "agent.quality-local": {
@@ -109,6 +111,37 @@ MEASUREMENTS_COMMAND = (
     "Jan,98,10.4\nFeb,82,11.0\nMar,74,13.1\nApr,66,15.6\nMay,42,19.8\nJun,19,24.0\n"
     "CSV\n"
     "wc -l outputs/measurements.csv"
+)
+
+
+# Meta template: a stand-in external engine with no DAGonStar dependency. It
+# reads the parameter document of DAGonStar's ``command`` adapter.
+WORDCOUNT_ENGINE = (
+    "\"\"\"Stand-in external engine: count the words of `text`.\"\"\"\n"
+    "import json\n"
+    "import os\n"
+    "import sys\n"
+    "from collections import Counter\n"
+    "\n"
+    "parameters = json.load(open(sys.argv[1], encoding=\"utf-8\"))\n"
+    "words = open(parameters[\"text\"], encoding=\"utf-8\").read().lower().split()\n"
+    "os.makedirs(\"results\", exist_ok=True)\n"
+    "with open(\"results/counts.tsv\", \"w\", encoding=\"utf-8\") as stream:\n"
+    "    for word, count in Counter(words).most_common(parameters.get(\"top\", 10)):\n"
+    "        stream.write(f\"{word}\\t{count}\\n\")\n"
+)
+VOLUME_EMIT_COMMAND = (
+    "for i in $(cat workflow:///scratch/shared/inputs/data/n.txt ); do\n"
+    "  echo $i > item-$i\n"
+    "  \"$DAGON_PYTHON\" -m dagon.adhoc stream publish \"$DAGON_STREAM_OUT\" item-$i\n"
+    "done"
+)
+VOLUME_TOTAL_COMMAND = (
+    "total=0\n"
+    "for item in $(\"$DAGON_PYTHON\" -m dagon.adhoc stream items workflow:///emit/numbers?stream=shared --into got); do\n"
+    "  total=$((total + $(cat \"$item\")))\n"
+    "done\n"
+    "echo $total > sum.txt"
 )
 
 
@@ -158,6 +191,31 @@ def apply_workflow_template(workflow: Workflow, template: str) -> None:
         config["inputs"] = {"source": "workflow:///prepare/outputs/observations.json"}
         add_workflow_task(workflow, "quality_control", "agentic", 420, 200, config)
         workflow.dagon_ini = {**workflow.dagon_ini, **AGENTIC_TEMPLATE_INI}
+    elif template == "volume":
+        add_workflow_task(workflow, "prepare", "batch", 80, 220, {"command": "mkdir -p data results\nseq 1 5 > data/n.txt\ntouch results/.keep", "inputs": {}})
+        add_workflow_task(workflow, "scratch", "volume", 320, 220, {
+            "action": "create", "provider": "dagonfs", "volume": "shared", "release": "auto", "options": {},
+            "stage_in": {"inputs/data": "workflow:///prepare/data", "results": "workflow:///prepare/results"},
+        })
+        add_workflow_task(workflow, "square", "batch", 580, 80, {"command": "for i in $(cat workflow:///scratch/shared/inputs/data/n.txt ); do echo $((i * i)); done > workflow:///scratch/shared/results/squares.txt", "inputs": {}})
+        add_workflow_task(workflow, "emit", "batch", 580, 240, {"command": VOLUME_EMIT_COMMAND, "inputs": {}})
+        add_workflow_task(workflow, "total", "batch", 820, 320, {"command": VOLUME_TOTAL_COMMAND, "inputs": {}})
+        add_workflow_task(workflow, "release", "volume", 1060, 160, {
+            "action": "destroy", "volume": "workflow:///scratch/shared", "release": "auto",
+            "stage_out": {"results": {"path": "results", "type": "directory"}},
+        })
+        add_workflow_task(workflow, "report", "batch", 1300, 220, {"command": "cat workflow:///release/results/squares.txt workflow:///total/sum.txt > report.txt", "inputs": {}})
+        workflow.runtime_options = {**workflow.runtime_options, "portable_emulation": True}
+    elif template == "meta":
+        add_workflow_task(workflow, "prepare", "batch", 120, 200, {"command": "mkdir -p data\nprintf 'sea wind sea wave sea wind\\n' > data/text.txt", "inputs": {}})
+        add_workflow_task(workflow, "wordcount", "meta", 420, 200, {
+            "engine": "command", "workflow": "wordcount.py", "workflow_source": WORDCOUNT_ENGINE,
+            "inputs": {"text": "workflow:///prepare/data/text.txt", "top": 3},
+            "outputs": {"counts": {"path": "counts.tsv", "source": "results/counts.tsv"}},
+            "engine_options": {"command": ["{python}", "{workflow}", "{parameters_file}"]},
+            "environment": {}, "staging": "copy",
+        })
+        add_workflow_task(workflow, "report", "batch", 720, 200, {"command": "head -n 1 workflow:///wordcount/outputs/counts.tsv > top.txt", "inputs": {}})
     elif template in ("table", "chart", "download"):
         add_workflow_task(workflow, "measure", "batch", 120, 200, {"command": MEASUREMENTS_COMMAND, "inputs": {}})
         source = {"source": "workflow:///measure/outputs/measurements.csv"}
@@ -454,7 +512,7 @@ def validate_graph_payload(payload: object) -> tuple[list[dict], list[dict]]:
                 raise ValueError(f"Task {task['name']} cannot reference its own outputs.")
             link = {"kind": LINK_DATA, "source_name": source_uid, "source_output": source_output, "target_name": task["name"], "target_input": target_input}
             key = (source_uid, source_output, task["name"], target_input)
-            if (source_uid, task["name"]) in existing_edges:
+            if any(item.get("kind") == LINK_EXPLICIT and item["source_name"] == source_uid and item["target_name"] == task["name"] for item in normalized_links):
                 # A data reference supersedes an explicit edge between the same tasks.
                 normalized_links = [item for item in normalized_links if not (item.get("kind") == LINK_EXPLICIT and item["source_name"] == source_uid and item["target_name"] == task["name"])]
                 existing_edges.discard((source_uid, task["name"]))

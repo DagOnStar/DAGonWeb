@@ -1,0 +1,111 @@
+{
+  "host": "localhost",
+  "id": null,
+  "name": "meta_example",
+  "tasks": {
+    "prepare": {
+      "command": "mkdir -p data\nprintf 'sea wind sea wave sea wind\\n' > data/text.txt",
+      "dagonweb": {
+        "config": {
+          "command": "mkdir -p data\nprintf 'sea wind sea wave sea wind\\n' > data/text.txt",
+          "inputs": {}
+        },
+        "x": 120,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "prepare",
+      "nexts": [
+        "wordcount"
+      ],
+      "prevs": [],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "report": {
+      "command": "head -n 1 workflow:///wordcount/outputs/counts.tsv > top.txt",
+      "dagonweb": {
+        "config": {
+          "command": "head -n 1 workflow:///wordcount/outputs/counts.tsv > top.txt",
+          "inputs": {}
+        },
+        "x": 720,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "report",
+      "nexts": [],
+      "prevs": [
+        "wordcount"
+      ],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "wordcount": {
+      "command": null,
+      "dagonweb": {
+        "config": {
+          "engine": "command",
+          "engine_options": {
+            "command": [
+              "{python}",
+              "{workflow}",
+              "{parameters_file}"
+            ]
+          },
+          "environment": {},
+          "inputs": {
+            "text": "workflow:///prepare/data/text.txt",
+            "top": 3
+          },
+          "outputs": {
+            "counts": {
+              "path": "counts.tsv",
+              "source": "results/counts.tsv"
+            }
+          },
+          "staging": "copy",
+          "workflow": "wordcount.py",
+          "workflow_source": "\"\"\"Stand-in external engine: count the words of `text`.\"\"\"\nimport json\nimport os\nimport sys\nfrom collections import Counter\n\nparameters = json.load(open(sys.argv[1], encoding=\"utf-8\"))\nwords = open(parameters[\"text\"], encoding=\"utf-8\").read().lower().split()\nos.makedirs(\"results\", exist_ok=True)\nwith open(\"results/counts.tsv\", \"w\", encoding=\"utf-8\") as stream:\n    for word, count in Counter(words).most_common(parameters.get(\"top\", 10)):\n        stream.write(f\"{word}\\t{count}\\n\")\n"
+        },
+        "x": 420,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "meta": {
+        "engine": "command",
+        "engine_options": {
+          "command": [
+            "{python}",
+            "{workflow}",
+            "{parameters_file}"
+          ]
+        },
+        "inputs": {
+          "text": "workflow:///prepare/data/text.txt",
+          "top": 3
+        },
+        "outputs": {
+          "counts": {
+            "path": "counts.tsv",
+            "source": "results/counts.tsv"
+          }
+        },
+        "schema_version": 1,
+        "workflow": "meta_workflows/wordcount/wordcount.py"
+      },
+      "name": "wordcount",
+      "nexts": [
+        "report"
+      ],
+      "prevs": [
+        "prepare"
+      ],
+      "status": "READY",
+      "type": "meta",
+      "working_dir": null
+    }
+  }
+}

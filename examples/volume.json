@@ -1,0 +1,200 @@
+{
+  "dagonweb": {
+    "runtime": {
+      "portable_emulation": true
+    }
+  },
+  "host": "localhost",
+  "id": null,
+  "name": "volume_example",
+  "tasks": {
+    "emit": {
+      "command": "for i in $(cat workflow:///scratch/shared/inputs/data/n.txt ); do\n  echo $i > item-$i\n  \"$DAGON_PYTHON\" -m dagon.adhoc stream publish \"$DAGON_STREAM_OUT\" item-$i\ndone",
+      "dagonweb": {
+        "config": {
+          "command": "for i in $(cat workflow:///scratch/shared/inputs/data/n.txt ); do\n  echo $i > item-$i\n  \"$DAGON_PYTHON\" -m dagon.adhoc stream publish \"$DAGON_STREAM_OUT\" item-$i\ndone",
+          "inputs": {}
+        },
+        "x": 580,
+        "y": 240
+      },
+      "explicit_prevs": [],
+      "name": "emit",
+      "nexts": [
+        "total"
+      ],
+      "prevs": [
+        "scratch"
+      ],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "prepare": {
+      "command": "mkdir -p data results\nseq 1 5 > data/n.txt\ntouch results/.keep",
+      "dagonweb": {
+        "config": {
+          "command": "mkdir -p data results\nseq 1 5 > data/n.txt\ntouch results/.keep",
+          "inputs": {}
+        },
+        "x": 80,
+        "y": 220
+      },
+      "explicit_prevs": [],
+      "name": "prepare",
+      "nexts": [
+        "scratch"
+      ],
+      "prevs": [],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "release": {
+      "command": "",
+      "dagonweb": {
+        "config": {
+          "action": "destroy",
+          "release": "auto",
+          "stage_out": {
+            "results": {
+              "path": "results",
+              "type": "directory"
+            }
+          },
+          "volume": "workflow:///scratch/shared"
+        },
+        "x": 1060,
+        "y": 160
+      },
+      "explicit_prevs": [],
+      "name": "release",
+      "nexts": [
+        "report"
+      ],
+      "prevs": [
+        "scratch"
+      ],
+      "status": "READY",
+      "type": "volume",
+      "volume": {
+        "action": "destroy",
+        "release": "auto",
+        "schema_version": 1,
+        "stage_out": {
+          "results": {
+            "path": "results",
+            "type": "directory"
+          }
+        },
+        "volume": "workflow:///scratch/shared"
+      },
+      "working_dir": null
+    },
+    "report": {
+      "command": "cat workflow:///release/results/squares.txt workflow:///total/sum.txt > report.txt",
+      "dagonweb": {
+        "config": {
+          "command": "cat workflow:///release/results/squares.txt workflow:///total/sum.txt > report.txt",
+          "inputs": {}
+        },
+        "x": 1300,
+        "y": 220
+      },
+      "explicit_prevs": [],
+      "name": "report",
+      "nexts": [],
+      "prevs": [
+        "release",
+        "total"
+      ],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "scratch": {
+      "command": "",
+      "dagonweb": {
+        "config": {
+          "action": "create",
+          "options": {},
+          "provider": "dagonfs",
+          "release": "auto",
+          "stage_in": {
+            "inputs/data": "workflow:///prepare/data",
+            "results": "workflow:///prepare/results"
+          },
+          "volume": "shared"
+        },
+        "x": 320,
+        "y": 220
+      },
+      "explicit_prevs": [],
+      "name": "scratch",
+      "nexts": [
+        "square",
+        "emit",
+        "release"
+      ],
+      "prevs": [
+        "prepare"
+      ],
+      "status": "READY",
+      "type": "volume",
+      "volume": {
+        "action": "create",
+        "provider": "dagonfs",
+        "release": "auto",
+        "schema_version": 1,
+        "stage_in": {
+          "inputs/data": "workflow:///prepare/data",
+          "results": "workflow:///prepare/results"
+        },
+        "volume": "shared"
+      },
+      "working_dir": null
+    },
+    "square": {
+      "command": "for i in $(cat workflow:///scratch/shared/inputs/data/n.txt ); do echo $((i * i)); done > workflow:///scratch/shared/results/squares.txt",
+      "dagonweb": {
+        "config": {
+          "command": "for i in $(cat workflow:///scratch/shared/inputs/data/n.txt ); do echo $((i * i)); done > workflow:///scratch/shared/results/squares.txt",
+          "inputs": {}
+        },
+        "x": 580,
+        "y": 80
+      },
+      "explicit_prevs": [],
+      "name": "square",
+      "nexts": [],
+      "prevs": [
+        "scratch"
+      ],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "total": {
+      "command": "total=0\nfor item in $(\"$DAGON_PYTHON\" -m dagon.adhoc stream items workflow:///emit/numbers?stream=shared --into got); do\n  total=$((total + $(cat \"$item\")))\ndone\necho $total > sum.txt",
+      "dagonweb": {
+        "config": {
+          "command": "total=0\nfor item in $(\"$DAGON_PYTHON\" -m dagon.adhoc stream items workflow:///emit/numbers?stream=shared --into got); do\n  total=$((total + $(cat \"$item\")))\ndone\necho $total > sum.txt",
+          "inputs": {}
+        },
+        "x": 820,
+        "y": 320
+      },
+      "explicit_prevs": [],
+      "name": "total",
+      "nexts": [
+        "report"
+      ],
+      "prevs": [
+        "emit"
+      ],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    }
+  }
+}

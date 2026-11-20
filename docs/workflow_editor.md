@@ -2,11 +2,11 @@
 
 The editor has three panes:
 
-- A **task palette**, grouped into Shell & HPC, Containers & orchestrators, Cloud/web/devices, and Python & AI, with a filter box.
+- A **task palette**, grouped into Shell & HPC, Containers & orchestrators, Cloud/web/devices, Python & AI, Volumes & meta-workflows, and DAGonWeb interactive, with a filter box.
 - A zoomable **canvas**.
 - A resizable **Inspector**. Use **Expand** to let it fill the canvas area, and **Standard** to restore it.
 
-All 14 DAGonStar task types are available. The palette and the Inspector forms are generated from the registry in `app/task_specs.py`, so a new DAGonStar option is added in one place.
+All 16 DAGonStar task types are available, including Volume and Meta ([Volumes, streams and meta-tasks](volumes_and_meta.md)). The palette and the Inspector forms are generated from the registry in `app/task_specs.py`, so a new DAGonStar option is added in one place.
 
 ## Tasks
 
@@ -30,6 +30,8 @@ To connect two tasks, drag from a producer's right connector to a consumer's lef
 To remove a link, click it. Links are always derived from the saved configuration:
 
 - `workflow:///task/path` and `workflow://<this workflow>/task/path` draw data links.
+- A reference with a `?stream` query (`workflow:///emit/numbers?stream=shared`) draws a stream link: an animated dotted line, labelled *stream* in the Inspector.
+- A Volume task's create/destroy fields are shown only for the selected action; Meta workflow sources are highlighted according to the definition's file extension.
 - `explicit_prevs` draws explicit links.
 - References to other workflows stay in the configuration but draw nothing.
 

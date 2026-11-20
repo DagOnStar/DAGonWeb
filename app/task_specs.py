@@ -22,8 +22,11 @@ from typing import Any
 
 from .interactive import FORM_FIELD_TYPES, interactive_command
 
+# ``?stream`` / ``?stream=<resource>`` is DAGonStar's only query: it streams
+# the path through a shared ad-hoc volume. Any other ``?`` stays in the path.
 WORKFLOW_REFERENCE = re.compile(
-    r"workflow://(?P<workflow>[A-Za-z0-9_-]{0,80})/(?P<task>[A-Za-z0-9_-]{1,80})/(?P<path>[^\s;|&<>()]+)"
+    r"workflow://(?P<workflow>[A-Za-z0-9_-]{0,80})/(?P<task>[A-Za-z0-9_-]{1,80})/"
+    r"(?P<path>[^\s;|&<>()]+?)(?:\?(?P<query>stream(?:=[A-Za-z0-9._-]+)?))?(?=[\s;|&<>()]|$)"
 )
 SHELL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # DAGonStar ends a ``workflow://`` reference at the next space only.  Shell
@@ -37,6 +40,7 @@ CATEGORIES = [
     ("containers", "Containers & orchestrators"),
     ("services", "Cloud, web & devices"),
     ("python_ai", "Python & AI"),
+    ("data", "Volumes & meta-workflows"),
     ("interactive", "DAGonWeb interactive"),
 ]
 
@@ -86,7 +90,8 @@ def _f(key: str, label: str, kind: str = "text", **extra: Any) -> dict[str, Any]
     Optional editor hints (used by the Monaco editor in the browser):
     ``language`` overrides the editor language, ``suggestions`` lists completion
     items (mapping keys, list values) and ``schema`` is the JSON schema of a
-    ``json`` field.
+    ``json`` field. ``show_when`` (``{"key": ["value", ...]}``) shows the field
+    only while another field of the task has one of those values.
     """
     return {"key": key, "label": label, "kind": kind, **extra}
 
@@ -138,6 +143,24 @@ HTTP_STATUS_SCHEMA: dict[str, Any] = {
         {"type": "array", "items": {"type": "integer", "minimum": 100, "maximum": 599}},
     ],
 }
+
+
+VOLUME_ACTIONS = ("create", "destroy")
+VOLUME_PROVIDERS = ("dagonfs", "hercules", "capio", "dynostore")
+VOLUME_RELEASE = ("auto", "end")
+META_ENGINES = ("command", "nextflow", "snakemake", "parsl", "streamflow", "cwl")
+# File names DAGonWeb may write a meta-task workflow definition to.
+META_WORKFLOW_FILE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}$")
+META_WORKFLOWS_DIR = "meta_workflows"
+META_ENGINE_SOURCE = (
+    "# A stand-in external engine: it reads the parameter document written by\n"
+    "# DAGonStar's command adapter and writes result.json in its run directory.\n"
+    "import json\n"
+    "import sys\n"
+    "\n"
+    "parameters = json.load(open(sys.argv[1], encoding='utf-8'))\n"
+    "json.dump({'engine': 'stand-in', 'parameters': parameters}, open('result.json', 'w', encoding='utf-8'), indent=2)\n"
+)
 
 
 INPUTS_FIELD = _f(
@@ -202,6 +225,15 @@ TASK_SPECS: dict[str, TaskSpec] = {
                 _f("nodelist", "Node list", advanced=True),
                 _f("sbatch_options", "Extra sbatch options", "list", advanced=True, suggestions=SBATCH_SUGGESTIONS, help="One option per line, for example <code>--gres=gpu:1</code>."),
                 _f("comment", "Job comment", advanced=True),
+                _f(
+                    "beeond",
+                    "BeeOND volume (JSON)",
+                    "json",
+                    advanced=True,
+                    placeholder='true, "task", or {"mountpoint": "/mnt/beeond"}',
+                    help="Job-local BeeGFS on demand: <code>true</code> or <code>\"task\"</code> for a per-task volume, or an object of "
+                    "BeeOND options. The command reaches it as <code>$DAGON_BEEOND</code>. Leave empty to disable.",
+                ),
                 PRE_STAGE_FIELD,
             ],
         ),
@@ -492,6 +524,99 @@ TASK_SPECS: dict[str, TaskSpec] = {
             ],
         ),
         TaskSpec(
+            "volume",
+            "Volume",
+            "data",
+            "Create or destroy an ad-hoc file-system volume shared through workflow://.",
+            "⛁",
+            "volume",
+            {
+                "action": "create",
+                "provider": "dagonfs",
+                "volume": "shared",
+                "stage_in": {},
+                "options": {},
+                "release": "auto",
+            },
+            [
+                _f("action", "Action", "select", options=list(VOLUME_ACTIONS), help="<em>create</em> starts the volume; an optional <em>destroy</em> task stages results out and releases it."),
+                _f("provider", "Provider", "select", options=list(VOLUME_PROVIDERS), show_when={"action": ["create"]}, help="Ad-hoc file system serving the volume. Portable emulation uses a local directory instead."),
+                _f(
+                    "volume",
+                    "Volume",
+                    help="Create: the volume name (letters, digits, <code>.</code>, <code>_</code>, <code>-</code>); other tasks use "
+                    "<code>workflow:///&lt;this task&gt;/&lt;volume&gt;/path</code>. Destroy: <code>workflow:///&lt;create task&gt;/&lt;volume&gt;</code>.",
+                ),
+                _f(
+                    "stage_in",
+                    "Stage in (JSON)",
+                    "json",
+                    show_when={"action": ["create"]},
+                    help="Path in the volume → source: a <code>workflow:///task/path</code> reference or <code>{\"path\": …, \"type\": \"file\"|\"directory\"}</code>.",
+                ),
+                _f(
+                    "stage_out",
+                    "Stage out (JSON)",
+                    "json",
+                    show_when={"action": ["destroy"]},
+                    help="Path in this task's directory → a path inside the volume (or a reference into it). Later tasks read <code>workflow:///&lt;this task&gt;/path</code>.",
+                ),
+                _f("release", "Release", "select", options=list(VOLUME_RELEASE), advanced=True, help="<em>auto</em> releases the volume when its last user finishes; <em>end</em> keeps it until a destroy task or the end of the run."),
+                _f("export", "Export variable", advanced=True, show_when={"action": ["create"]}, help="Optional shell variable carrying the volume path in every task bound to it."),
+                _f("options", "Provider options (JSON)", "json", advanced=True, show_when={"action": ["create"]}, help="Adapter options, for example <code>{\"frontend\": \"fuse3\"}</code>. Never put credentials here."),
+            ],
+        ),
+        TaskSpec(
+            "meta",
+            "Meta",
+            "data",
+            "Run a Nextflow, Snakemake, Parsl, StreamFlow, CWL or command-line workflow unmodified.",
+            "⧉",
+            "meta_task",
+            {
+                "engine": "command",
+                "workflow": "engine.py",
+                "workflow_source": META_ENGINE_SOURCE,
+                "inputs": {"top": 10},
+                "outputs": {"result": {"path": "result.json", "source": "result.json"}},
+                "engine_options": {"command": ["{python}", "{workflow}", "{parameters_file}"]},
+                "environment": {},
+                "staging": "copy",
+            },
+            [
+                _f("engine", "Engine", "select", options=list(META_ENGINES), help="Adapter that runs the external workflow. Portable emulation uses the mock engine."),
+                _f(
+                    "workflow",
+                    "Workflow definition",
+                    placeholder="main.nf, Snakefile, wordcount.cwl, nextflow-io/hello",
+                    help="File name of the definition below (or a path on the execution host, or an engine-resolved name such as <code>nextflow-io/hello</code>).",
+                ),
+                _f(
+                    "workflow_source",
+                    "Workflow source",
+                    "code",
+                    mode="workflow",
+                    help="Optional. DAGonWeb writes it as the workflow definition file inside the run directory.",
+                ),
+                _f(
+                    "inputs",
+                    "Inputs (JSON)",
+                    "json",
+                    help="Name → value. A <code>workflow:///task/path</code> string is staged (file or directory) and passed as an absolute path.",
+                ),
+                _f(
+                    "outputs",
+                    "Outputs (JSON)",
+                    "json",
+                    help="Name → relative path, or <code>{\"path\", \"source\", \"type\"}</code>. Collected below <code>outputs/</code>: downstream tasks read <code>workflow:///&lt;this task&gt;/outputs/&lt;path&gt;</code>.",
+                ),
+                _f("engine_options", "Engine options (JSON)", "json", help="For example <code>{\"profile\": \"standard\"}</code> (Nextflow) or <code>{\"cores\": 2}</code> (Snakemake). The <em>command</em> engine needs an argument vector."),
+                _f("timeout", "Timeout (s)", "number", advanced=True),
+                _f("staging", "Input staging", "select", options=["copy", "symlink"], advanced=True),
+                _f("environment", "Environment variables", "mapping", advanced=True, suggestions=ENVIRONMENT_SUGGESTIONS, help="Do not put secrets here: engines inherit credentials from the environment."),
+            ],
+        ),
+        TaskSpec(
             "upload",
             "Upload data",
             "interactive",
@@ -741,6 +866,9 @@ def dagon_task_arguments(task_type: str, name: str, config: dict[str, Any]) -> t
             options = _as_list(config.get("sbatch_options"))
             if options:
                 kwargs["sbatch_options"] = options
+            beeond = _beeond(config.get("beeond"))
+            if beeond is not None:
+                kwargs["beeond"] = beeond
             if isinstance(config.get("pre_stage"), bool):
                 kwargs["pre_stage"] = config["pre_stage"]
         elif task_type == "docker":
@@ -836,7 +964,90 @@ def dagon_task_arguments(task_type: str, name: str, config: dict[str, Any]) -> t
             kwargs["pre_stage"] = config["pre_stage"]
         return [], kwargs
 
+    if task_type == "volume":
+        return [name], volume_specification(config)
+
+    if task_type == "meta":
+        return [name], meta_specification(name, config)
+
     raise ValueError(f"Unsupported task type {task_type}")
+
+
+def _beeond(value: Any) -> Any:
+    """BeeOND option of a Slurm task: ``True``, ``"task"`` or an options object."""
+    if value is True or (isinstance(value, dict) and value):
+        return value
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def volume_specification(config: dict[str, Any]) -> dict[str, Any]:
+    """Keyword arguments of ``DagonTask(TaskType.VOLUME, name, ...)``."""
+    config = config or {}
+    action = config.get("action") or "create"
+    spec: dict[str, Any] = {}
+    if action == "destroy":
+        spec["action"] = "destroy"
+        spec["volume"] = str(config.get("volume") or "")
+        if _present(config.get("stage_out")):
+            spec["stage_out"] = config["stage_out"]
+    else:
+        spec["provider"] = str(config.get("provider") or "")
+        if _present(config.get("volume")):
+            spec["volume"] = str(config["volume"])
+        for key in ("stage_in", "options"):
+            if _present(config.get(key)):
+                spec[key] = config[key]
+        if _present(config.get("export")):
+            spec["export"] = str(config["export"])
+    if config.get("release") == "end":
+        spec["release"] = "end"
+    return spec
+
+
+def meta_workflow_path(name: str, config: dict[str, Any]) -> str:
+    """Workflow definition handed to DAGonStar for a meta-task.
+
+    With an inline ``workflow_source`` the definition is the file DAGonWeb
+    writes, relative to the directory the workflow is built in
+    (``meta_workflows/<task>/<file>``); the executor passes the absolute path.
+    """
+    workflow = str((config or {}).get("workflow") or "").strip()
+    source = (config or {}).get("workflow_source")
+    if isinstance(source, str) and source.strip():
+        if not META_WORKFLOW_FILE.match(workflow) or workflow in (".", ".."):
+            raise ValueError(f"Meta task {name}: with an inline source the workflow definition must be a plain file name, for example main.nf.")
+        return f"{META_WORKFLOWS_DIR}/{name}/{workflow}"
+    return workflow
+
+
+def meta_specification(name: str, config: dict[str, Any]) -> dict[str, Any]:
+    """Keyword arguments of ``DagonTask(TaskType.META, name, ...)``."""
+    config = config or {}
+    spec: dict[str, Any] = {"engine": str(config.get("engine") or ""), "workflow": meta_workflow_path(name, config)}
+    for key in ("inputs", "outputs", "engine_options", "environment"):
+        if _present(config.get(key)):
+            spec[key] = _dict(config.get(key))
+    timeout = config.get("timeout")
+    if timeout not in (None, ""):
+        try:
+            spec["timeout"] = float(timeout) if not float(timeout).is_integer() else int(float(timeout))
+        except (TypeError, ValueError):
+            pass
+    if config.get("staging") == "symlink":
+        spec["staging"] = "symlink"
+    return spec
+
+
+def meta_workflow_sources(tasks: Any) -> list[tuple[str, str, str]]:
+    """``(task name, relative path, source)`` of every inline meta workflow."""
+    found = []
+    for name, task_type, config in tasks:
+        source = (config or {}).get("workflow_source")
+        if task_type == "meta" and isinstance(source, str) and source.strip():
+            found.append((name, meta_workflow_path(name, config), source.rstrip() + "\n"))
+    return found
 
 
 def web_specification(config: dict[str, Any]) -> dict[str, Any]:
@@ -910,6 +1121,8 @@ def document_fields(task_type: str, config: dict[str, Any], name: str = "task") 
         fields: dict[str, Any] = {"command": runtime_command(task_type, config)}
         if task_type == "slurm" and isinstance(config.get("pre_stage"), bool):
             fields["pre_stage"] = config["pre_stage"]
+        if task_type == "slurm" and _beeond(config.get("beeond")) is not None:
+            fields["beeond"] = _beeond(config.get("beeond"))
         return fields
     if task_type == "native":
         _, kwargs = dagon_task_arguments(task_type, "native", config)
@@ -927,6 +1140,12 @@ def document_fields(task_type: str, config: dict[str, Any], name: str = "task") 
         return {"command": None, "iot": {"schemaVersion": 1, **spec}}
     if task_type == "agentic":
         return {"command": None, "agentic": agentic_contract(config)}
+    if task_type == "volume":
+        spec = volume_specification(config)
+        action = spec.pop("action", "create")
+        return {"command": "", "volume": {"schema_version": 1, "action": action, "release": spec.pop("release", "auto"), **spec}}
+    if task_type == "meta":
+        return {"command": None, "meta": {"schema_version": 1, **meta_specification(name, config)}}
     return {"command": str(config.get("command") or "")}
 
 
@@ -940,7 +1159,7 @@ def config_from_document(task_data: dict[str, Any]) -> dict[str, Any]:
             references = [match.group(0) for match in WORKFLOW_REFERENCE.finditer(command)]
             remainder = WORKFLOW_REFERENCE.sub("", command).strip()
             config = {"inputs": {f"ref_{index}": reference for index, reference in enumerate(references, start=1)}, "command": remainder}
-        for key in ("pre_stage", "image", "partition", "time", "namespace"):
+        for key in ("pre_stage", "image", "partition", "time", "namespace", "beeond"):
             if key in task_data and task_data[key] is not None:
                 config[key] = task_data[key]
         return config
@@ -976,7 +1195,50 @@ def config_from_document(task_data: dict[str, Any]) -> dict[str, Any]:
         raw = _dict(task_data.get("agentic"))
         raw.pop("schema_version", None)
         return raw
+    if task_type == "volume":
+        return volume_config(_dict(task_data.get("volume")))
+    if task_type == "meta":
+        return meta_config(_dict(task_data.get("meta")))
     return {"command": task_data.get("command") or ""}
+
+
+def volume_config(spec: dict[str, Any]) -> dict[str, Any]:
+    """Editor configuration of a volume task (``volume`` JSON or kwargs)."""
+    spec = {key: value for key, value in spec.items() if key != "schema_version" and value is not None}
+    action = spec.get("action") or "create"
+    if action == "destroy":
+        config: dict[str, Any] = {"action": "destroy", "volume": spec.get("volume") or "", "stage_out": _dict(spec.get("stage_out"))}
+    else:
+        config = {"action": "create", "provider": str(spec.get("provider") or ""), "volume": spec.get("volume") or "", "stage_in": _dict(spec.get("stage_in")), "options": _dict(spec.get("options"))}
+        if spec.get("export"):
+            config["export"] = spec["export"]
+    config["release"] = spec.get("release") or "auto"
+    return config
+
+
+def meta_config(spec: dict[str, Any]) -> dict[str, Any]:
+    """Editor configuration of a meta-task (``meta`` JSON or kwargs)."""
+    spec = {key: value for key, value in spec.items() if key != "schema_version" and value is not None}
+    inputs = {}
+    for key, value in _dict(spec.get("inputs")).items():
+        # DAGonStar normalizes inputs to descriptors; keep the plain form when lossless.
+        if isinstance(value, dict) and value.get("type") == "value" and set(value) <= {"type", "value"}:
+            value = value.get("value")
+        elif isinstance(value, dict) and value.get("type") == "auto" and set(value) <= {"type", "path"}:
+            value = value.get("path")
+        inputs[key] = value
+    config: dict[str, Any] = {
+        "engine": str(spec.get("engine") or ""),
+        "workflow": str(spec.get("workflow") or ""),
+        "inputs": inputs,
+        "outputs": _dict(spec.get("outputs")),
+        "engine_options": _dict(spec.get("engine_options")),
+        "environment": _dict(spec.get("environment")),
+        "staging": spec.get("staging") or "copy",
+    }
+    if spec.get("timeout") is not None:
+        config["timeout"] = spec["timeout"]
+    return config
 
 
 def editor_references(task_type: str, config: dict[str, Any]) -> dict[str, Any]:
@@ -984,6 +1246,8 @@ def editor_references(task_type: str, config: dict[str, Any]) -> dict[str, Any]:
     config = dict(config or {})
     if task_type == "native":
         config.pop("source", None)
+    if task_type == "meta":
+        config.pop("workflow_source", None)
     config.pop("explicit_prevs", None)
     return config
 
@@ -1090,4 +1354,8 @@ def config_from_arguments(task_type: str, args: list[Any], kwargs: dict[str, Any
         return name, {IOT_ALIASES.get(key, key): value for key, value in bound.items() if value is not None}
     if task_type == "agentic":
         return name, {key: value for key, value in bound.items() if value is not None and key in (*AGENTIC_KEYS, "pre_stage")}
+    if task_type == "volume":
+        return name, volume_config(bound)
+    if task_type == "meta":
+        return name, meta_config(bound)
     raise ValueError(f"Unsupported task type {task_type}")

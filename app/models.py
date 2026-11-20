@@ -18,7 +18,7 @@ user_roles = db.Table(
 )
 
 class TaskType(str, Enum):
-    """DAGonStar 2.9 task types supported by the editor and executor."""
+    """DAGonStar 3.0 task types supported by the editor and executor."""
 
     CHECKPOINT = "checkpoint"
     BATCH = "batch"
@@ -34,6 +34,8 @@ class TaskType(str, Enum):
     FAAS = "faas"
     IOT = "iot"
     AGENTIC = "agentic"
+    META = "meta"
+    VOLUME = "volume"
     # DAGonWeb interactive types; DAGonStar executes them as BATCH tasks.
     UPLOAD = "upload"
     FORM = "form"
@@ -242,7 +244,7 @@ class Workflow(TimestampMixin, db.Model):
         """Return the DAGonStar task-map document for this workflow.
 
         Native DAGonStar fields follow ``dagon.Workflow.as_json()`` from
-        DAGonStar 2.9; editor state stays in the additive ``dagonweb`` keys.
+        DAGonStar 3.0; editor state stays in the additive ``dagonweb`` keys.
         """
         tasks: dict[str, dict[str, Any]] = {}
         for task in self.tasks:

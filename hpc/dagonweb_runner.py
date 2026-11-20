@@ -62,6 +62,8 @@ CONFIG_FILE = Path(os.environ.get("DAGONWEB_RUNNER_CONFIG", "/etc/dagonweb/runne
 REMOTE_VERBS = {"ping", "submit", "status", "cancel", "ls", "get", "archive", "put", "delete", "keys", "info"}
 RUN_ID = re.compile(r"^[0-9]{1,12}$")
 TASK_NAME = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+# meta_workflows/<task>/<file>: where an inline Meta workflow definition is written.
+META_PATH = re.compile(r"^meta_workflows/(?P<task>[A-Za-z0-9_-]{1,80})/[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}$")
 MAX_SPEC_BYTES = 20 * 1024 * 1024
 MAX_EVENTS_BYTES = 1024 * 1024
 DEFAULT_MAX_GET = 1024 * 1024 * 1024
@@ -580,6 +582,10 @@ def validate_spec(spec: Any) -> None:
         module = str(item.get("module") or "")
         if module and not all(part.isidentifier() for part in module.split(".")):
             raise RunnerError("Invalid Native module name.")
+    for item in spec.get("meta", []):
+        match = META_PATH.match(str(item.get("path", ""))) if isinstance(item, dict) else None
+        if not match or match.group("task") != item.get("task") or item.get("task") not in names or not isinstance(item.get("source"), str):
+            raise RunnerError("Meta workflow definitions must belong to a task of the run.")
     if not isinstance(spec.get("config", {}), dict):
         raise RunnerError("The DAGonStar configuration must be an object.")
 
@@ -666,6 +672,17 @@ def prepare_native(spec: dict[str, Any], directory: Path) -> tuple[Path | None, 
     return (module_root if has_modules else None), overrides
 
 
+def prepare_meta(spec: dict[str, Any], directory: Path) -> dict[str, dict[str, Any]]:
+    """Write inline Meta workflow definitions below the state folder."""
+    overrides: dict[str, dict[str, Any]] = {}
+    for item in spec.get("meta", []):
+        target = inside(directory / STATE_DIR, item["path"])
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(item["source"], encoding="utf-8")
+        overrides[item["task"]] = {"workflow": str(target)}
+    return overrides
+
+
 def enable_fair(runtime: Any, spec: dict[str, Any], directory: Path) -> None:
     """Record FAIR provenance with DAGonStar when the workflow asks for it."""
     profile = spec.get("fair")
@@ -704,6 +721,8 @@ def execute(base: Path, run_id: str, resume: bool) -> int:
         # Task directories never leave the run directory, whatever the spec says.
         config.setdefault("batch", {}).update({"scratch_dir_base": str(directory), "remove_dir": False})
         module_root, overrides = prepare_native(spec, directory)
+        for name, values in prepare_meta(spec, directory).items():
+            overrides[name] = {**overrides.get(name, {}), **values}
         if module_root:
             sys.path.insert(0, str(module_root))
         options = spec.get("runtime") or {}

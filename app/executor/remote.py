@@ -32,7 +32,7 @@ from ..dagon_ini import merge_workflow_dagon_config, runtime_dagon_config
 from ..extensions import db
 from ..interactive import safe_filename, substitute_runtime
 from ..models import LINK_EXPLICIT, RunStatus, TaskRun, Workflow, WorkflowRun
-from ..task_specs import INTERACTIVE_TASK_TYPES, dagon_task_arguments, runtime_type
+from ..task_specs import INTERACTIVE_TASK_TYPES, dagon_task_arguments, meta_workflow_sources, runtime_type
 from .local import timestamped_log
 
 FINAL_STATES = {"success", "failed", "lost"}
@@ -123,6 +123,8 @@ def build_run_spec(workflow: Workflow, run_dir: str, python: str) -> dict[str, A
         "tasks": tasks,
         "explicit": explicit,
         "native": native,
+        # Inline Meta workflow definitions, written by the runner below its state folder.
+        "meta": [{"task": name, "path": path, "source": source} for name, path, source in meta_workflow_sources((task.name, task.normalized_task_type, task.config) for task in workflow.tasks)],
         "orchestrator": orchestrator_options(),
     }
     fair = fair_spec(workflow)

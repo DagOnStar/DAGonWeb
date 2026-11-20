@@ -1,6 +1,6 @@
 # Execution model
 
-DAGonWeb runs workflows with the DAGonStar runtime (2.9.4, pinned in `requirements.txt`). When you press **Run**, the server takes these steps:
+DAGonWeb runs workflows with the DAGonStar runtime (3.0.0, pinned in `requirements.txt`). When you press **Run**, the server takes these steps:
 
 1. **Create a run.** DAGonWeb adds a `WorkflowRun` row (`pending`) and a run directory `run_<id>/` below the configured scratch root, then redirects the browser to the live run page.
 2. **Dispatch the run.** With the default `thread` backend, a thread of the web process runs it, at most **Concurrent runs per process** at a time (others wait for a slot). With the `redis` backend, the run is queued on Redis and an RQ worker (`flask --app wsgi worker`) executes it; if Redis is unreachable, DAGonWeb falls back to a local thread. The run loads the workflow's `dagon.ini`:
@@ -12,9 +12,12 @@ DAGonWeb runs workflows with the DAGonStar runtime (2.9.4, pinned in `requiremen
 4. **Add the tasks.** For each task, `app/task_specs.py` turns the saved configuration into the arguments of `DagonTask(...)`, such as image, partition, specification, or agentic contract.
    - Batch-like tasks get their named inputs prepended as shell assignments (`data=workflow:///extract/data.txt ;`). The script can then use `$data`.
    - Commands are normalised so that a `workflow:///` reference always ends at a space. DAGonStar's reference parser requires this.
+   - The inline workflow definition of a Meta task is written to `run_<id>/_dagonweb/meta_workflows/<task>/<file>`, and DAGonStar receives its absolute path.
+   - A command that exits with a non-zero status fails its task and every task that depends on it (DAGonStar 3.0 behaviour).
 5. **Set dependencies.**
    - Explicit edges are added with `add_dependency_to()`.
    - `make_dependencies()` infers the data edges from `workflow:///` references and stages the referenced files into each consumer.
+   - References into a [Volume task](volumes_and_meta.md)'s volume are not copied: the consumer is bound to the volume. A `?stream` reference lets the consumer start while its producer runs. Volumes are released by a destroy task, by reference counting, or at the end of the run, also after a failure.
 6. **Launch and wait.** The thread calls `launch(resume_checkpoint_file=...)` and then `wait()`. DAGonStar event listeners run on each task's thread and write progress into `TaskRun` rows:
    - `on_task_start`, `on_task_staging_in_start`, `on_task_execute_start`, `on_task_staging_out_start` and `on_task_end`.
    - Each event is timestamped, so the run page can show *staging inputs → executing → staging outputs*.

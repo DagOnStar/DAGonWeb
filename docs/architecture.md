@@ -12,7 +12,7 @@ DAGonWeb is organized as a conventional Flask application:
 - `app/privacy.py`, `app/legal.py`, `app/account.py`: GDPR support (cookie inventory, data export, erasure, retention), the privacy notice, cookie policy and accessibility statement, and the self-service account page.
 - `app/pycode.py`: the Python exporter (commented program, headless ZIP bundle) and the AST-only Python/ZIP importer.
 - `app/workflows`: workflow CRUD, graph API, visual editor, run pages.
-- `app/task_specs.py`: the registry of the 14 DAGonStar task types and the 5 DAGonWeb interactive types. It defines the palette metadata, the Inspector fields and defaults, the document fields, and the `DagonTask` arguments for each type.
+- `app/task_specs.py`: the registry of the 16 DAGonStar task types and the 5 DAGonWeb interactive types. It defines the palette metadata, the Inspector fields and defaults, the document fields, and the `DagonTask` arguments for each type.
 - `app/executor`: `dispatch.py` sends runs to a bounded thread pool or a Redis (RQ) queue (`app/jobs.py` is the worker entry point); `local.py` builds and launches the DAGonStar runtime workflow (`build_runtime_workflow`, `execute_workflow`), records events and failures, handles checkpoint resume and CWL export, and inspects scratch directories.
 - `app/static`: PWA assets and the JavaScript visual editor.
 - `app/templates`: Bootstrap templates.

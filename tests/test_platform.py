@@ -472,7 +472,7 @@ def test_config_from_arguments_inverts_dagon_task_arguments(task_type):
     assert dagon_task_arguments(task_type, name, config) == (args, kwargs)
 
 
-@pytest.mark.parametrize("template", ["batch", "checkpoint", "native", "agentic", "faas", "download", "form", "upload", "slurm"])
+@pytest.mark.parametrize("template", ["batch", "checkpoint", "native", "agentic", "faas", "download", "form", "upload", "slurm", "volume", "meta"])
 def test_python_export_import_round_trip(app, template):
     with app.app_context():
         workflow = new_workflow(f"Round_{template}", template)

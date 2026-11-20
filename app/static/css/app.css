@@ -15,6 +15,8 @@
   --dw-cat-containers: #0f8a7e;
   --dw-cat-services: #7a4fd0;
   --dw-cat-python_ai: #c2410c;
+  --dw-cat-data: #4d7c0f;
+  --dw-link-stream: #0e7490;
   --dw-running: #2457d6;
   --dw-success: #198754;
   --dw-failed: #d63343;
@@ -40,6 +42,8 @@
   --dw-cat-containers: #35c2b3;
   --dw-cat-services: #a98bf0;
   --dw-cat-python_ai: #f08a4b;
+  --dw-cat-data: #a3d35a;
+  --dw-link-stream: #4cc9e0;
 }
 
 [data-bs-theme="dark"] .btn-outline-secondary {
@@ -66,6 +70,7 @@ body { background: var(--bs-tertiary-bg); }
 .cat-containers { --cat: var(--dw-cat-containers); }
 .cat-services { --cat: var(--dw-cat-services); }
 .cat-python_ai { --cat: var(--dw-cat-python_ai); }
+.cat-data { --cat: var(--dw-cat-data); }
 .type-icon { display: inline-flex; align-items: center; justify-content: center; width: 1.6rem; height: 1.6rem; border-radius: .4rem; background: color-mix(in srgb, var(--cat, var(--dw-brand)) 14%, transparent); color: var(--cat, var(--dw-brand)); font-weight: 700; flex: 0 0 auto; }
 .type-badge { border: 1px solid color-mix(in srgb, var(--cat, var(--dw-brand)) 40%, transparent); color: var(--cat, var(--dw-brand)); background: color-mix(in srgb, var(--cat, var(--dw-brand)) 8%, transparent); font-weight: 600; }
 
@@ -95,6 +100,9 @@ body { background: var(--bs-tertiary-bg); }
 #links, .run-links { position: absolute; inset: 0 auto auto 0; overflow: visible; pointer-events: none; }
 .link-line { fill: none; stroke: var(--dw-link); stroke-width: 2; }
 .link-line.explicit { stroke: var(--dw-link-explicit); stroke-dasharray: 6 5; }
+.link-line.stream { stroke: var(--dw-link-stream); stroke-dasharray: 2 4; stroke-linecap: round; animation: dw-stream 1.2s linear infinite; }
+@keyframes dw-stream { to { stroke-dashoffset: -12; } }
+@media (prefers-reduced-motion: reduce) { .link-line.stream { animation: none; } }
 .link-line.draft { stroke: var(--dw-brand); stroke-dasharray: 5 4; }
 .link-hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer; }
 .link-hit:hover + .link-line, .link-line.highlight { stroke: var(--dw-brand); stroke-width: 3; }

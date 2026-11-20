@@ -24,11 +24,13 @@ from ..dagon_ini import merge_workflow_dagon_config, runtime_dagon_config
 from ..extensions import db
 from ..models import LINK_EXPLICIT, RunStatus, Setting, TaskRun, Workflow, WorkflowRun
 from ..interactive import substitute_runtime
-from ..task_specs import INTERACTIVE_TASK_TYPES, dagon_task_arguments, runtime_type
+from ..task_specs import INTERACTIVE_TASK_TYPES, dagon_task_arguments, meta_workflow_sources, runtime_type
 
 CHECKPOINT_FILE = ("_dagonweb", "checkpoint.json")
 # User-provided data of interactive Upload/Form tasks, one folder per task.
 INTERACTIVE_DATA_DIR = ("_dagonweb", "data")
+# Inline workflow definitions of Meta tasks, written below the run directory.
+META_WORKFLOW_ROOT = "_dagonweb"
 # sys.path is process-global: serialize the short windows that change it.
 _IMPORT_LOCK = threading.RLock()
 _TASK_EVENTS = {
@@ -180,6 +182,25 @@ def native_modules_importable(workflow: Workflow, root: Path) -> Iterator[None]:
                 sys.path.remove(str(module_root))
 
 
+def materialize_meta_workflows(workflow: Workflow, base: Path) -> dict[str, dict[str, Any]]:
+    """Write inline Meta workflow definitions below ``base`` (the run directory).
+
+    Returns ``DagonTask`` keyword overrides with the absolute definition path.
+    """
+    overrides: dict[str, dict[str, Any]] = {}
+    sources = meta_workflow_sources((task.name, task.normalized_task_type, task.config) for task in workflow.tasks)
+    if not sources:
+        return overrides
+    base = base.resolve()
+    root = safe_child(base, META_WORKFLOW_ROOT)
+    for name, relative, source in sources:
+        target = safe_child(root, *relative.split("/"))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source, encoding="utf-8")
+        overrides[name] = {"workflow": str(target)}
+    return overrides
+
+
 def build_runtime_workflow(
     workflow: Workflow,
     config: dict[str, dict[str, Any]],
@@ -206,7 +227,10 @@ def build_runtime_workflow(
         portable_emulation=bool(options.get("portable_emulation")),
         pre_stage=bool(options.get("pre_stage")),
     )
-    overrides = overrides or {}
+    overrides = dict(overrides or {})
+    scratch_base = Path(str(config.get("batch", {}).get("scratch_dir_base") or scratch_root()))
+    for name, values in materialize_meta_workflows(workflow, scratch_base).items():
+        overrides[name] = {**overrides.get(name, {}), **values}
     tasks: dict[str, Any] = {}
     for task in workflow.tasks:
         task_type = task.normalized_task_type
