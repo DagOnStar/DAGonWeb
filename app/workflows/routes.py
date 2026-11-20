@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 import shutil
 from configparser import Error as ConfigParserError
@@ -14,12 +15,12 @@ from flask_login import current_user, login_required
 from ..extensions import db
 from ..dagon_ini import dump_dagon_ini, parse_dagon_ini
 from ..models import ACTIVE_RUN_STATUSES, LINK_DATA, LINK_EXPLICIT, TaskRun, TaskType, Workflow, WorkflowLink, WorkflowTask, WorkflowRun
-from ..executor.local import timestamped_log, execute_workflow, export_cwl, list_directory, list_files, preview_task_file, safe_child, scratch_root
+from ..executor.local import timestamped_log, execute_workflow, export_cwl, is_geojson, list_directory, list_files, preview_task_file, safe_child, scratch_root
 from ..task_specs import INTERACTIVE_TASK_TYPES, CATEGORIES, TASK_SPECS, TASK_TYPE_LABELS, WORKFLOW_REFERENCE, config_from_document, dagon_task_arguments, editor_references, palette
 from werkzeug.utils import secure_filename
 from ..interactive import coerce_form_values, form_document, form_env, form_fields, safe_filename
 from .forms import DAGONSTAR_NAME_RE, RunForm, WorkflowForm, WorkflowSetupForm
-from .. import audit, settings
+from .. import audit, hpc, settings
 from ..authz import permission_required
 from ..pycode import PythonImportError, import_python_files, portable_ini_sections, python_bundle, read_upload, workflow_python_source  # noqa: F401
 
@@ -240,6 +241,14 @@ def remove_run_scratch(run: WorkflowRun) -> None:
     """Remove a completed run's artifacts only when they are under scratch."""
     if not run.scratch_path:
         return
+    if run.unix_username:
+        # Cluster runs live in the user's own directory: ask the runner.
+        try:
+            with remote_client(run) as client:
+                client.delete(run.id)
+        except hpc.HpcError as exc:
+            current_app.logger.warning("Could not remove cluster files of run %s: %s", run.id, exc)
+        return
     root = scratch_root()
     run_root = Path(run.scratch_path).resolve()
     if root in run_root.parents and run_root.is_dir():
@@ -279,7 +288,50 @@ def populate_fair_form(form: WorkflowSetupForm, workflow: Workflow) -> None:
     form.fair_environment_allowlist.data = ", ".join(profile.get("environment_allowlist", []))
 
 
+def remote_client(run: WorkflowRun) -> hpc.RunnerClient:
+    """Runner client for a cluster run, signing in as the run's own account."""
+    user = run.user
+    if not user or user.unix_username != run.unix_username:
+        raise hpc.HpcError("The cluster account that executed this run is no longer linked.")
+    return hpc.client_for(user)
+
+
+def remote_relative_path(task_run: TaskRun, relative_path: str) -> str:
+    """Path of a task file relative to its cluster run directory."""
+    run_root = posixpath.normpath(task_run.run.scratch_path)
+    task_root = posixpath.normpath(task_run.scratch_path or run_root)
+    if task_root != run_root and not task_root.startswith(run_root + "/"):
+        raise ValueError("Unsafe scratch path")
+    requested = posixpath.normpath(posixpath.join(task_root, (relative_path or "").lstrip("/")))
+    if requested != task_root and not requested.startswith(task_root + "/"):
+        raise ValueError("Unsafe scratch path")
+    return posixpath.relpath(requested, run_root)
+
+
+def preview_remote_content(name: str, content: bytes) -> dict:
+    """The preview payload of ``preview_task_file`` for bytes from the cluster."""
+    if b"\0" in content:
+        raise ValueError("Binary files cannot be previewed")
+    text = content.decode("utf-8")
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        value = None
+    if value is not None:
+        return {"kind": "geojson" if is_geojson(value) else "json", "content": text}
+    suffix = posixpath.splitext(name)[1].lower()
+    if suffix in {".csv", ".tsv"}:
+        return {"kind": "csv", "content": text, "delimiter": "\t" if suffix == ".tsv" else ","}
+    return {"kind": "text", "content": text}
+
+
+REMOTE_PREVIEW_LIMIT = 1_000_000
+REMOTE_DOWNLOAD_LIMIT = 256 * 1024 * 1024
+
+
 def run_file_path(run: WorkflowRun, relative_path: str) -> Path:
+    if run.unix_username:
+        raise ValueError("Cluster run files are reached through dagonweb-runner")
     root = scratch_root()
     run_root = Path(run.scratch_path).resolve()
     if root not in run_root.parents and run_root != root:
@@ -306,6 +358,9 @@ def fair_export_root(run: WorkflowRun) -> Path | None:
 
 
 def fair_exports(run: WorkflowRun) -> dict:
+    if run.unix_username:
+        fair = run.remote_meta.get("fair") or {}
+        return {"enabled": bool(run.workflow.fair_profile.get("enabled")) or bool(fair), "files": fair.get("files") or [], "report": fair.get("report")}
     root = fair_export_root(run)
     if not root:
         return {"enabled": bool(run.workflow.fair_profile.get("enabled")), "files": [], "report": None}
@@ -839,10 +894,18 @@ def run_workflow(workflow_id):
     if not wf.tasks:
         flash("Add at least one task before running the workflow.", "warning")
         return redirect(url_for("workflows.editor", workflow_id=wf.id))
-    run = WorkflowRun(workflow_id=wf.id, user_id=current_user.id, status="pending", label=(request.form.get("label") or "").strip()[:255], scratch_path="", log="")
+    unix_username = None
+    if hpc.enabled():
+        # A run always executes as the submitter's own cluster account,
+        # whoever owns the workflow, administrators included.
+        if not current_user.unix_linked:
+            flash("Runs on this server execute on the cluster as your own Unix account. Link it first.", "warning")
+            return redirect(url_for("account.index", _anchor="clusterTitle"))
+        unix_username = current_user.unix_username
+    run = WorkflowRun(workflow_id=wf.id, user_id=current_user.id, status="pending", label=(request.form.get("label") or "").strip()[:255], scratch_path="", log="", unix_username=unix_username)
     db.session.add(run)
     db.session.flush()
-    audit.record("run.start", wf.name, f"run {run.id}")
+    audit.record("run.start", wf.name, f"run {run.id}" + (f" as {unix_username}" if unix_username else ""))
     db.session.commit()
     start_run_thread(wf.id, run.id)
     flash("Workflow run started.", "info")
@@ -857,6 +920,12 @@ def resume_run(run_id: int):
         abort(403)
     if run.status != "failed":
         flash("Only failed runs can be resumed.", "warning")
+        return redirect(url_for("workflows.run_detail", workflow_id=run.workflow_id, run_id=run.id))
+    if run.unix_username and not (run.user_id == current_user.id and current_user.unix_linked and current_user.unix_username == run.unix_username):
+        flash(f"Only the submitter can resume this run, because it executes as their cluster account ({run.unix_username}).", "warning")
+        return redirect(url_for("workflows.run_detail", workflow_id=run.workflow_id, run_id=run.id))
+    if not run.unix_username and hpc.enabled():
+        flash("This run executed inside DAGonWeb before cluster execution was turned on, so it cannot be resumed. Start a new run.", "warning")
         return redirect(url_for("workflows.run_detail", workflow_id=run.workflow_id, run_id=run.id))
     run.status = "pending"
     db.session.commit()
@@ -913,8 +982,18 @@ def run_detail(workflow_id, run_id):
         abort(404)
     if not can_access_run(run):
         abort(403)
+    follow_cluster_run(run)
     specs = {key: {"label": spec.label, "icon": spec.icon, "category": spec.category} for key, spec in TASK_SPECS.items()}
     return render_template("workflows/run.html", workflow=wf, run=run, fair=fair_exports(run), specs=specs, can_manage=can_manage_run(run))
+
+
+def follow_cluster_run(run: WorkflowRun) -> None:
+    """Reconnect to an active cluster run that no process follows any more."""
+    if run.unix_username and run.status == "running":
+        from ..executor.remote import ensure_followed
+
+        if ensure_followed(run):
+            db.session.refresh(run)
 
 
 @bp.get("/<int:workflow_id>/runs/<int:run_id>/fair/<path:filename>")
@@ -927,6 +1006,16 @@ def download_fair_export(workflow_id: int, run_id: int, filename: str):
         abort(403)
     if filename not in FAIR_EXPORT_FILES:
         abort(404)
+    if run.unix_username:
+        fair = run.remote_meta.get("fair") or {}
+        if not fair.get("root") or filename not in {item["name"] for item in fair.get("files") or []}:
+            abort(404)
+        try:
+            with remote_client(run) as client:
+                content = client.get(run.id, f"{fair['root']}/{filename}", REMOTE_DOWNLOAD_LIMIT)
+        except hpc.HpcError as exc:
+            return Response(f"Cannot download the file from the cluster: {exc}", status=502, mimetype="text/plain")
+        return send_file(BytesIO(content), as_attachment=True, download_name=filename)
     root = fair_export_root(run)
     if not root:
         abort(404)
@@ -947,6 +1036,7 @@ def run_status(workflow_id: int, run_id: int):
         abort(404)
     if not can_access_run(run):
         abort(403)
+    follow_cluster_run(run)
     return jsonify({
         "status": run.status,
         "log": run.log or "",
@@ -987,9 +1077,12 @@ def pending_interactions(run: WorkflowRun) -> list[dict]:
         return []
     states = {task_run.task_uid: task_run.status for task_run in run.task_runs}
     pending = []
+    provided = set(run.remote_meta.get("inputs") or []) if run.unix_username else set()
+    if run.unix_username and run.user_id != current_user.id:
+        return []  # inputs of a cluster run are written as its submitter: only they provide them
     for name, task in interactive_tasks(run, ("upload", "form")).items():
         try:
-            ready = (interaction_dir(run, name) / ".ready").is_file()
+            ready = name in provided if run.unix_username else (interaction_dir(run, name) / ".ready").is_file()
         except ValueError:
             continue
         if ready or states.get(name) not in ("pending", "running"):
@@ -1010,6 +1103,8 @@ def run_results(run: WorkflowRun) -> list[dict]:
         return []
     results = []
     task_runs = {task_run.task_uid: task_run for task_run in run.task_runs if task_run.status == "success"}
+    if run.unix_username:
+        return remote_run_results(run, task_runs)
     for name, task in interactive_tasks(run, ("table", "chart", "download")).items():
         task_run = task_runs.get(name)
         if not task_run:
@@ -1037,10 +1132,89 @@ def run_results(run: WorkflowRun) -> list[dict]:
     return results
 
 
+def remote_run_results(run: WorkflowRun, task_runs: dict) -> list[dict]:
+    """Results of a cluster run, as fetched once by the executor (no SSH here)."""
+    results = []
+    stored = run.remote_meta.get("results") or {}
+    for name, task in interactive_tasks(run, ("table", "chart", "download")).items():
+        item, task_run = stored.get(name), task_runs.get(name)
+        if not item or item.get("missing") or not task_run:
+            continue
+        kind = task.normalized_task_type
+        if kind == "download":
+            if item.get("name"):
+                results.append({"task": name, "kind": kind, "name": item["name"], "size": item.get("size", 0), "url": url_for("workflows.download_task_run_file", task_run_id=task_run.id, path=item["path"])})
+            continue
+        entry = {"task": name, "kind": kind, "data": item.get("data"), "task_run_id": task_run.id}
+        if kind == "chart":
+            entry["svg_url"] = url_for("workflows.download_task_run_file", task_run_id=task_run.id, path="outputs/chart.svg")
+        if kind == "table":
+            entry["csv_url"] = url_for("workflows.download_task_run_file", task_run_id=task_run.id, path="outputs/table.csv")
+        results.append(entry)
+    return results
+
+
 def _accepted(filename: str, accept: str) -> bool:
     rules = [item.strip().lower() for item in accept.split(",") if item.strip()]
     suffixes = [rule for rule in rules if rule.startswith(".")]
     return not suffixes or any(filename.lower().endswith(suffix) for suffix in suffixes)
+
+
+def interaction_payload(task: WorkflowTask) -> tuple[list[tuple[str, bytes]], str]:
+    """The files an Upload/Form task waits for, validated, as (relative path, bytes)."""
+    config = task.config
+    if task.normalized_task_type == "upload":
+        files = [item for item in request.files.getlist("files") if item and item.filename]
+        if not files:
+            raise ValueError("Choose a file to upload.")
+        if len(files) > 1 and not config.get("multiple"):
+            raise ValueError("This task accepts a single file.")
+        limit = min(int(config.get("max_mb") or 50), int(settings.get("max_upload_mb") or 50)) * 1024 * 1024
+        accept = str(config.get("accept") or "")
+        payload = []
+        for item in files:
+            original = secure_filename(item.filename) or "upload.dat"
+            if not _accepted(original, accept):
+                raise ValueError(f"{original}: accepted types are {accept}.")
+            name = original if config.get("multiple") else safe_filename(config.get("save_as"), "data.csv")
+            content = item.stream.read(limit + 1)
+            if len(content) > limit:
+                raise ValueError(f"{original} is larger than {limit // (1024 * 1024)} MB.")
+            payload.append((f"files/{name}", content))
+        return payload, ", ".join(name.split("/", 1)[1] for name, _ in payload)
+    body = request.get_json(silent=True)
+    raw = body if isinstance(body, dict) else request.form.to_dict()
+    values = coerce_form_values(form_fields(config), raw)
+    return [("form.json", form_document(values).encode("utf-8")), ("form.env", form_env(values).encode("utf-8"))], ", ".join(values)
+
+
+def submit_remote_interaction(run: WorkflowRun, task: WorkflowTask):
+    """Write a cluster run's Upload/Form input into its data folder, as the submitter."""
+    if run.user_id != current_user.id:
+        return jsonify({"error": "Only the person who started this cluster run can provide its inputs."}), 403
+    if task.name in (run.remote_meta.get("inputs") or []):
+        return jsonify({"error": "This input was already provided."}), 409
+    try:
+        payload, detail = interaction_payload(task)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    folder = f"_dagonweb/data/{task.name}"
+    try:
+        with remote_client(run) as client:
+            for relative, content in payload:
+                client.put(run.id, f"{folder}/{relative}", content)
+            client.put(run.id, f"{folder}/.ready", b"")
+    except hpc.HpcError as exc:
+        return jsonify({"error": f"Cannot send the input to the cluster: {exc}"}), 502
+    # The follower writes the same row: lock and re-read it before changing it.
+    from ..executor.remote import locked_run
+
+    run = locked_run(run.id)
+    run.update_remote_meta(inputs=sorted({*(run.remote_meta.get("inputs") or []), task.name}))
+    run.log = (run.log or "") + timestamped_log(f"Input for {task.name} provided by {current_user.name}.")
+    audit.record("run.interaction", f"{run.workflow.name}/{task.name}", detail[:500])
+    db.session.commit()
+    return jsonify({"status": "ok"})
 
 
 @bp.post("/runs/<int:run_id>/interact/<task_name>")
@@ -1055,6 +1229,8 @@ def submit_interaction(run_id: int, task_name: str):
         abort(404)
     if run.status not in ACTIVE_RUN_STATUSES:
         return jsonify({"error": "The run is no longer active."}), 409
+    if run.unix_username:
+        return submit_remote_interaction(run, task)
     try:
         target = interaction_dir(run, task.name)
     except ValueError:
@@ -1115,14 +1291,21 @@ def files():
     if not task_run or not can_access_run(task_run.run):
         abort(403)
     try:
+        if task_run.run.unix_username:
+            with remote_client(task_run.run) as client:
+                return jsonify(client.ls(task_run.run.id, remote_relative_path(task_run, "")))
         return jsonify(list_files(path))
     except ValueError:
         abort(403)
+    except hpc.HpcError as exc:
+        return jsonify({"error": str(exc)}), 502
 
 
 def task_run_file_path(task_run: TaskRun, relative_path: str) -> Path:
     # Stored paths are treated as untrusted too: never let a record point the
     # browser outside the configured scratch root.
+    if task_run.run.unix_username:
+        raise ValueError("Cluster run files are reached through dagonweb-runner")
     root = scratch_root()
     task_root = Path(task_run.scratch_path).resolve()
     if root not in task_root.parents and task_root != root:
@@ -1138,10 +1321,15 @@ def browse_task_run_files(task_run_id: int):
         abort(403)
     relative_path = request.args.get("path", "")
     try:
+        if task_run.run.unix_username:
+            with remote_client(task_run.run) as client:
+                return jsonify({"path": relative_path, "files": client.ls(task_run.run.id, remote_relative_path(task_run, relative_path))})
         base = task_run_file_path(task_run, relative_path)
         return jsonify({"path": relative_path, "files": list_directory(base)})
     except ValueError:
         abort(403)
+    except hpc.HpcError as exc:
+        return jsonify({"error": str(exc)}), 502
 
 
 @bp.get("/task-runs/<int:task_run_id>/file")
@@ -1152,9 +1340,15 @@ def preview_task_run_file(task_run_id: int):
         abort(403)
     relative_path = request.args.get("path", "")
     try:
+        if task_run.run.unix_username:
+            with remote_client(task_run.run) as client:
+                content = client.get(task_run.run.id, remote_relative_path(task_run, relative_path), REMOTE_PREVIEW_LIMIT)
+            return jsonify({"path": relative_path, **preview_remote_content(relative_path, content)})
         return jsonify({"path": relative_path, **preview_task_file(task_run_file_path(task_run, relative_path))})
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+    except (ValueError, UnicodeDecodeError) as exc:
+        return jsonify({"error": str(exc) if isinstance(exc, ValueError) else "The file is not UTF-8 text"}), 400
+    except hpc.HpcError as exc:
+        return jsonify({"error": str(exc)}), 502
 
 
 @bp.get("/task-runs/<int:task_run_id>/download")
@@ -1164,6 +1358,14 @@ def download_task_run_file(task_run_id: int):
     if not can_access_run(task_run.run):
         abort(403)
     try:
+        if task_run.run.unix_username:
+            relative = remote_relative_path(task_run, request.args.get("path", ""))
+            try:
+                with remote_client(task_run.run) as client:
+                    content = client.get(task_run.run.id, relative, REMOTE_DOWNLOAD_LIMIT)
+            except hpc.HpcError as exc:
+                return Response(f"Cannot download the file from the cluster: {exc}", status=502, mimetype="text/plain")
+            return send_file(BytesIO(content), as_attachment=True, download_name=posixpath.basename(relative) or "download")
         path = task_run_file_path(task_run, request.args.get("path", ""))
         if not path.is_file():
             abort(404)
@@ -1178,6 +1380,16 @@ def download_task_run_archive(task_run_id: int):
     task_run = db.get_or_404(TaskRun, task_run_id)
     if not can_access_run(task_run.run):
         abort(403)
+    if task_run.run.unix_username:
+        try:
+            relative = remote_relative_path(task_run, "")
+            with remote_client(task_run.run) as client:
+                content = client.archive(task_run.run.id, relative, REMOTE_DOWNLOAD_LIMIT)
+        except ValueError:
+            abort(403)
+        except hpc.HpcError as exc:
+            return Response(f"Cannot archive the folder on the cluster: {exc}", status=502, mimetype="text/plain")
+        return send_file(BytesIO(content), mimetype="application/zip", as_attachment=True, download_name=f"{task_run.task_uid}-scratch.zip")
     try:
         root = task_run_file_path(task_run, "")
         if not root.is_dir():

@@ -104,6 +104,14 @@ class User(UserMixin, TimestampMixin, db.Model):
     # GDPR: the privacy notice version the user accepted, and when.
     privacy_version = db.Column(db.String(40))
     privacy_accepted_at = db.Column(db.DateTime)
+    # HPC cluster account (``app/hpc.py``). ``unix_username`` is only a claim
+    # until ``unix_linked_at`` is set: DAGonWeb proved it can sign in as that
+    # Unix user with the key pair below, whose public half the user added to
+    # ``~/.ssh/authorized_keys``. The private key is encrypted at rest.
+    unix_username = db.Column(db.String(64), index=True)
+    unix_public_key = db.Column(db.Text)
+    unix_private_key = db.Column(db.Text)
+    unix_linked_at = db.Column(db.DateTime)
     roles = db.relationship("Role", secondary=user_roles, lazy="joined", backref=db.backref("users", lazy="dynamic"))
 
     def set_password(self, password: str) -> None:
@@ -130,6 +138,10 @@ class User(UserMixin, TimestampMixin, db.Model):
     @property
     def is_active(self) -> bool:  # type: ignore[override]
         return self.active
+
+    @property
+    def unix_linked(self) -> bool:
+        return bool(self.unix_username and self.unix_linked_at and self.unix_private_key)
 
 
 class RegistrationToken(TimestampMixin, db.Model):
@@ -331,8 +343,34 @@ class WorkflowRun(TimestampMixin, db.Model):
     label = db.Column(db.String(255), default="", nullable=False)
     scratch_path = db.Column(db.String(1024), nullable=False)
     log = db.Column(db.Text, default="")
+    # Set for runs executed on the HPC cluster: the Unix account the run
+    # executes as (always the submitter's own), and ``scratch_path`` is then
+    # a path on the cluster, reached only through ``dagonweb-runner``.
+    unix_username = db.Column(db.String(64))
+    # Cluster runs: what DAGonWeb already read from the runner (event offset,
+    # inputs provided, fetched results and FAIR exports), and when a process
+    # last followed the run, so another process can pick it up after a restart.
+    remote_meta_json = db.Column(db.Text)
+    monitor_heartbeat = db.Column(db.DateTime)
     workflow = db.relationship("Workflow", backref=db.backref("runs", cascade="all, delete-orphan", lazy="dynamic"))
     user = db.relationship("User")
+
+    @property
+    def remote_meta(self) -> dict[str, Any]:
+        try:
+            value = json.loads(self.remote_meta_json or "{}")
+        except json.JSONDecodeError:
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    @remote_meta.setter
+    def remote_meta(self, value: dict[str, Any]) -> None:
+        self.remote_meta_json = json.dumps(value)
+
+    def update_remote_meta(self, **values: Any) -> None:
+        meta = self.remote_meta
+        meta.update(values)
+        self.remote_meta = meta
 
 class TaskRun(TimestampMixin, db.Model):
     __tablename__ = "task_runs"

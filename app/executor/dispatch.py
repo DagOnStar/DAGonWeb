@@ -52,6 +52,13 @@ def _append_log(run_id: int, message: str) -> None:
 
 def submit_run(workflow_id: int, run_id: int, resume: bool = False) -> str:
     """Start or enqueue a run; return the backend that accepted it."""
+    run = db.session.get(WorkflowRun, run_id)
+    if run is not None and run.unix_username:
+        # Cluster runs execute on the cluster; this process only submits and
+        # follows them, so they take no local execution slot and need no
+        # worker. A restart is harmless: another process reattaches.
+        start_cluster_thread(current_app._get_current_object(), workflow_id, run_id, resume)
+        return "cluster"
     if settings.get("execution_backend") == "redis":
         try:
             queue = redis_queue()
@@ -73,6 +80,16 @@ def submit_run(workflow_id: int, run_id: int, resume: bool = False) -> str:
             return "redis"
     start_thread(current_app._get_current_object(), workflow_id, run_id, resume)
     return "thread"
+
+
+def start_cluster_thread(app: Flask, workflow_id: int, run_id: int, resume: bool = False) -> threading.Thread:
+    def submit_and_follow() -> None:
+        with app.app_context():
+            run_job(workflow_id, run_id, resume)
+
+    thread = threading.Thread(target=submit_and_follow, daemon=True, name=f"DAGonWeb-cluster-run-{run_id}")
+    thread.start()
+    return thread
 
 
 def _slots(app: Flask) -> threading.BoundedSemaphore:
@@ -104,6 +121,7 @@ def start_thread(app: Flask, workflow_id: int, run_id: int, resume: bool = False
 
 def run_job(workflow_id: int, run_id: int, resume: bool = False) -> None:
     """Execute one run inside an application context (thread or worker)."""
+    from .. import hpc
     from ..models import Workflow
     from .local import execute_workflow
 
@@ -111,7 +129,15 @@ def run_job(workflow_id: int, run_id: int, resume: bool = False) -> None:
         workflow = db.session.get(Workflow, workflow_id)
         workflow_run = db.session.get(WorkflowRun, run_id)
         if workflow and workflow_run:
-            execute_workflow(workflow, workflow_run.user_id, workflow_run, resume=resume)
+            if workflow_run.unix_username:
+                from .remote import execute_remote
+
+                execute_remote(workflow, workflow_run, resume=resume)
+            elif hpc.enabled():
+                # With cluster execution on, nothing may run as the container user.
+                raise RuntimeError("cluster execution is enabled, so runs must execute as a linked cluster account.")
+            else:
+                execute_workflow(workflow, workflow_run.user_id, workflow_run, resume=resume)
     except Exception as exc:
         db.session.rollback()
         workflow_run = db.session.get(WorkflowRun, run_id)

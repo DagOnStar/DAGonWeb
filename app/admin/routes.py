@@ -130,6 +130,9 @@ def settings_section(section: str):
                 errors[definition.key] = str(exc)
         if section == "storage" and "scratch_dir" in staged and not str(staged["scratch_dir"]).strip():
             errors["scratch_dir"] = "The scratch directory is required."
+        if section == "hpc" and staged.get("hpc_enabled", settings.get("hpc_enabled")):
+            if not str(staged.get("hpc_ssh_host_key", settings.get("hpc_ssh_host_key")) or "").strip():
+                errors["hpc_ssh_host_key"] = "The login node host key is required before cluster execution can be turned on."
         if not errors:
             for key, value in staged.items():
                 settings.set_value(key, value)

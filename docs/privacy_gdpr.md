@@ -25,6 +25,7 @@ All settings can be pinned with `DAGONWEB_<KEY>` environment variables (see [con
   - *Access and portability* (Art. 15, 20): **Download my data** returns a JSON file with the account, workflows (as DAGonStar documents), runs and their logs, and the user's audit entries.
   - *Rectification* (Art. 16): change the display name; change the password for local accounts.
   - *Erasure* (Art. 17): delete the account after confirming the email address (and password for local accounts). Workflows, runs and their scratch files are removed. Audit entries are kept for their retention period but detached: the user link, the email address and the IP address are removed.
+  - *Cluster account* (HPC mode): the export lists the linked Unix user name and the public key, never the private key. Unlinking or erasure deletes the key pair; erasure also asks the cluster to delete the user's run folders.
 - **Administrator tools** for requests received by email: *Export data* and *Erase account and data* on each user's page. The last administrator and users with active runs cannot be erased.
 - **Retention**: `flask --app wsgi cleanup-runs` (run it daily from cron) deletes finished runs past the run retention, audit entries past the audit retention, used or expired registration links, and lists inactive accounts.
 - **Data minimisation**: the guest playground stores nothing on the server; dry runs are checked and discarded. The workflow assistant sends only the workflow document and messages, never run files.

@@ -187,7 +187,7 @@
       ${log}
       <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
         <nav aria-label="Scratch path" class="small mono flex-grow-1">${breadcrumbs.map((part, index) => `<a href="#" data-crumb="${escapeHtml(breadcrumbs.slice(1, index + 1).join('/'))}">${index ? escapeHtml(part) : 'scratch'}</a>`).join(' / ')}</nav>
-        <a class="btn btn-sm btn-outline-secondary" href="${escapeHtml(taskUrl(layout.dataset.archiveUrl, task.id))}">Download ZIP</a>
+        ${layout.dataset.archiveUrl ? `<a class="btn btn-sm btn-outline-secondary" href="${escapeHtml(taskUrl(layout.dataset.archiveUrl, task.id))}">Download ZIP</a>` : ''}
       </div>
       <div class="list-group list-group-flush border rounded mb-2" style="max-height:16rem;overflow:auto">
         ${data.files.map(file => `<button type="button" class="list-group-item list-group-item-action d-flex justify-content-between py-1" data-name="${escapeHtml(file.name)}" data-dir="${file.is_dir}">

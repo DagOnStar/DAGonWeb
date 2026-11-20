@@ -10,6 +10,10 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SCRATCH_DIR = os.getenv("SCRATCH_DIR", str(BASE_DIR / "scratch"))
     DAGON_INI_PATH = os.getenv("DAGON_INI_PATH", str(BASE_DIR / "instance" / "dagon.ini"))
+    # Encrypts the users' cluster SSH keys at rest (app/hpc.py). A Fernet key
+    # (``python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"``)
+    # or any passphrase; empty derives the key from SECRET_KEY.
+    HPC_KEY_SECRET = os.getenv("HPC_KEY_SECRET", "")
     WTF_CSRF_TIME_LIMIT = None
     # Cookies: first-party, HttpOnly, SameSite=Lax; Secure behind HTTPS.
     SESSION_COOKIE_SAMESITE = "Lax"

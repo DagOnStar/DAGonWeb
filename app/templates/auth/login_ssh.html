@@ -1,0 +1,30 @@
+{% extends 'base.html' %}{% from '_forms.html' import field, error_summary %}
+{% block title %}Sign in with your SSH key - {{ branding.site_name }}{% endblock %}{% block content %}
+<div class="row justify-content-center"><div class="col-sm-11 col-md-8 col-lg-6"><div class="card auth-card"><div class="card-body p-4">
+  <h1 class="h4 mb-3">Sign in with your cluster SSH key</h1>
+  {{ error_summary([form]) }}
+  {% if step == 'name' %}
+    <p class="small text-body-secondary">For users whose cluster account is already linked to {{ branding.site_name }}. You sign a one-time challenge on your own computer with <code>ssh-keygen</code>, using a key from your <code>~/.ssh/authorized_keys</code> on the cluster. Your private key never leaves your computer.</p>
+    <form method="post" novalidate>{{ form.hidden_tag() }}
+      {{ field(form.username) }}
+      {{ form.submit(class='btn btn-primary w-100') }}
+    </form>
+  {% else %}
+    <ol class="ssh-steps ps-3">
+      <li class="mb-3">On your own computer, sign this challenge for <strong>{{ username }}</strong> (valid for {{ minutes }} minutes, once):
+        <pre class="cluster-key mt-2 mb-1" id="sshChallenge" tabindex="0" aria-label="Challenge">{{ challenge }}</pre>
+        <p class="small mb-1">With OpenSSH 8.1 or later:</p>
+        <pre class="cluster-key mb-1" id="sshCommand" tabindex="0" aria-label="Command to sign the challenge">{{ command }}</pre>
+        <p class="form-text mb-0">Change <code>~/.ssh/id_ed25519</code> to your key file if it has another name. The key must also be in your <code>authorized_keys</code> on the cluster, without <code>command=</code> or <code>from=</code> options.</p>
+      </li>
+      <li>Paste the whole output, from <code>-----BEGIN SSH SIGNATURE-----</code> to <code>-----END SSH SIGNATURE-----</code>:
+        <form method="post" class="mt-2" novalidate>{{ form.hidden_tag() }}
+          {{ field(form.signature, input_class='form-control font-monospace small') }}
+          {{ form.submit(class='btn btn-primary w-100') }}
+        </form>
+      </li>
+    </ol>
+    <p class="small mb-0"><a href="{{ url_for('auth.ssh_login') }}">Use another cluster user name</a></p>
+  {% endif %}
+  <p class="small mt-3 mb-0"><a href="{{ url_for('auth.login') }}">Other ways to sign in</a></p>
+</div></div></div></div>{% endblock %}

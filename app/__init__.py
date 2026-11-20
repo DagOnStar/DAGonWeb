@@ -163,6 +163,16 @@ def create_app(config_object: type[Config] = Config) -> Flask:
         print(f"DAGonWeb worker listening on '{queue.name}' at {connection.connection_pool.connection_kwargs.get('host', 'redis')}")
         worker_class([queue], connection=connection).work(burst=burst)
 
+    @app.cli.command("hpc-reattach")
+    def hpc_reattach_command() -> None:
+        """Follow active cluster runs that no process is following (after a restart)."""
+        from .executor.remote import reattach_all
+
+        threads = reattach_all(daemon=False)
+        print(f"Following {len(threads)} cluster run(s) until they finish.")
+        for thread in threads:
+            thread.join()
+
     @app.cli.command("cleanup-runs")
     @click.option("--days", type=int, default=None, help="Override the configured retention period.")
     def cleanup_runs_command(days: int | None) -> None:

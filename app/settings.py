@@ -51,6 +51,7 @@ SECTIONS: list[tuple[str, str, str]] = [
     ("appearance", "Appearance", "Site name, tagline, logo, colors and default theme."),
     ("authentication", "Authentication", "Local accounts, self-registration and single sign-on providers."),
     ("execution", "Execution", "How workflow runs are dispatched: in-process threads or a Redis queue."),
+    ("hpc", "HPC cluster", "Run workflows on the cluster login node as each user's own Unix account, over SSH."),
     ("storage", "Storage", "Scratch directory, retention and upload limits."),
     ("smtp", "Email (SMTP)", "Outgoing mail for registration links and notifications."),
     ("llm", "LLM connector", "OpenAI-compatible endpoint used by the agentic workflow assistant."),
@@ -93,6 +94,18 @@ _DEFS: list[SettingDef] = [
     SettingDef("redis_queue", "Queue name", "execution", default="dagonweb"),
     SettingDef("max_concurrent_runs", "Concurrent runs per process", "execution", "int", 4, minimum=1, maximum=256, help="Thread dispatcher only; with Redis, concurrency is the number of workers."),
     SettingDef("run_timeout_hours", "Run timeout (hours)", "execution", "int", 24, minimum=1, maximum=720),
+    # HPC cluster (app/hpc.py, hpc/dagonweb_runner.py, docs/hpc.md)
+    SettingDef("hpc_enabled", "Run workflows as the users' own cluster accounts", "hpc", "bool", False, help="Every run then executes over SSH as the submitter's linked Unix account, through <code>dagonweb-runner</code>. Nothing runs inside the DAGonWeb container, and users must link their account first. See <code>docs/hpc.md</code>."),
+    SettingDef("hpc_ssh_host", "Login node host", "hpc", default="host.docker.internal", group="SSH connection", help="Seen from the DAGonWeb container. With Docker Compose on the login node itself, <code>host.docker.internal</code> (mapped to <code>host-gateway</code>)."),
+    SettingDef("hpc_ssh_port", "SSH port", "hpc", "int", 22, minimum=1, maximum=65535, group="SSH connection"),
+    SettingDef("hpc_ssh_host_key", "Login node host key", "hpc", "textarea", "", group="SSH connection", help="Required. One public host key, for example the output of <code>cat /etc/ssh/ssh_host_ed25519_key.pub</code>. DAGonWeb never accepts unknown host keys."),
+    SettingDef("hpc_runner_command", "Runner command", "hpc", default="/opt/dagonweb/bin/dagonweb-runner", group="Runner", help="Forced command written into each user's <code>authorized_keys</code> line. The key can run nothing else."),
+    SettingDef("hpc_source_cidr", "Allowed source addresses", "hpc", default="", group="Runner", help="<code>from=</code> restriction of the key, for example the Docker bridge <code>172.16.0.0/12</code>. Empty leaves it out (not recommended)."),
+    SettingDef("hpc_min_uid", "Lowest allowed Unix uid", "hpc", "int", 1000, minimum=1, maximum=2_000_000_000, group="Runner", help="Accounts below it (root, system accounts) can never be linked."),
+    SettingDef("hpc_orchestrator", "Run the DAGonStar orchestrator", "hpc", "select", "login", options=(("login", "On the login node (detached process)"), ("slurm", "As a small Slurm job (sbatch)")), group="Runner", help="With Slurm, each run's orchestrator is a job that submits and watches the workflow's tasks. Cluster administrators can force a mode in <code>/etc/dagonweb/runner.json</code>."),
+    SettingDef("hpc_sbatch_options", "sbatch options for the orchestrator job", "hpc", default="--time=24:00:00 --mem=2G --cpus-per-task=1", group="Runner", help="Long options only, for example <code>--partition=service --time=48:00:00</code>."),
+    SettingDef("hpc_ssh_login_enabled", "Allow signing in with the user's own cluster SSH key", "hpc", "bool", False, group="Sign-in", help="Users with a linked cluster account sign in by signing a one-time challenge with <code>ssh-keygen -Y sign</code>, using any key in their <code>authorized_keys</code>. The private key never leaves their computer."),
+    SettingDef("hpc_poll_seconds", "Status poll interval (seconds)", "hpc", "number", 5, minimum=0.1, maximum=300, group="Runner"),
     # Storage
     SettingDef("scratch_dir", "Scratch directory", "storage", default="", help="Mount this path as a persistent volume in containers. Every run, checkpoint and upload stays below it."),
     SettingDef("run_retention_days", "Delete finished runs after (days)", "storage", "int", 0, minimum=0, maximum=3650, help="0 keeps runs forever. Apply with <code>flask --app wsgi cleanup-runs</code> (for example from cron)."),
@@ -228,7 +241,59 @@ def validate(definition: SettingDef, raw: str | None) -> Any:
         raise ValueError(f"{definition.label} must be an http(s) or redis URL.")
     if len(value) > 4000:
         raise ValueError(f"{definition.label} is too long.")
+    if value and definition.key in _EXTRA_VALIDATORS:
+        _EXTRA_VALIDATORS[definition.key](definition, value)
     return value
+
+
+HOST_KEY = re.compile(r"^(?:\S+\s+)?(?:ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa)\s+[A-Za-z0-9+/]+={0,3}(?:\s+\S.*)?$")
+HOST_NAME = re.compile(r"^[A-Za-z0-9._:-]{1,253}$")
+RUNNER_COMMAND = re.compile(r"^/[A-Za-z0-9._/-]{1,500}$")
+
+
+def _validate_host_key(definition: SettingDef, value: str) -> None:
+    if len(value.splitlines()) != 1 or not HOST_KEY.match(value):
+        raise ValueError(f"{definition.label} must be one OpenSSH public key line, for example ssh-ed25519 AAAA...")
+
+
+def _validate_host(definition: SettingDef, value: str) -> None:
+    if not HOST_NAME.match(value):
+        raise ValueError(f"{definition.label} must be a host name or an IP address.")
+
+
+def _validate_runner(definition: SettingDef, value: str) -> None:
+    if not RUNNER_COMMAND.match(value):
+        raise ValueError(f"{definition.label} must be an absolute path without spaces or quotes.")
+
+
+def _validate_cidrs(definition: SettingDef, value: str) -> None:
+    import ipaddress
+
+    for item in value.split(","):
+        try:
+            ipaddress.ip_network(item.strip(), strict=False)
+        except ValueError:
+            raise ValueError(f"{definition.label} must be a comma-separated list of addresses or networks.") from None
+
+
+_EXTRA_VALIDATORS = {
+    "hpc_ssh_host_key": _validate_host_key,
+    "hpc_ssh_host": _validate_host,
+    "hpc_runner_command": _validate_runner,
+    "hpc_source_cidr": _validate_cidrs,
+    "hpc_sbatch_options": lambda definition, value: _validate_sbatch(definition, value),
+}
+
+
+def _validate_sbatch(definition: SettingDef, value: str) -> None:
+    import shlex
+
+    try:
+        options = shlex.split(value)
+    except ValueError:
+        raise ValueError(f"{definition.label} has unbalanced quotes.") from None
+    if any(not option.startswith("--") for option in options):
+        raise ValueError(f"{definition.label} accepts long options only, for example --time=24:00:00.")
 
 
 def section_values(section: str) -> list[dict[str, Any]]:
