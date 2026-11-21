@@ -1,0 +1,108 @@
+{
+  "dagonweb": {
+    "runtime": {
+      "portable_emulation": true
+    }
+  },
+  "host": "localhost",
+  "id": null,
+  "name": "meta_emulated_example",
+  "tasks": {
+    "prepare": {
+      "command": "mkdir -p data\nprintf 'sea wind sea wave sea wind\\n' > data/text.txt",
+      "dagonweb": {
+        "config": {
+          "command": "mkdir -p data\nprintf 'sea wind sea wave sea wind\\n' > data/text.txt",
+          "inputs": {}
+        },
+        "x": 120,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "prepare",
+      "nexts": [
+        "wordcount"
+      ],
+      "prevs": [],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "report": {
+      "command": "cp workflow:///wordcount/outputs/counts.tsv report.txt",
+      "dagonweb": {
+        "config": {
+          "command": "cp workflow:///wordcount/outputs/counts.tsv report.txt",
+          "inputs": {}
+        },
+        "x": 720,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "name": "report",
+      "nexts": [],
+      "prevs": [
+        "wordcount"
+      ],
+      "status": "READY",
+      "type": "batch",
+      "working_dir": null
+    },
+    "wordcount": {
+      "command": null,
+      "dagonweb": {
+        "config": {
+          "engine": "nextflow",
+          "engine_options": {
+            "profile": "standard"
+          },
+          "environment": {},
+          "inputs": {
+            "text": "workflow:///prepare/data/text.txt",
+            "top": 3
+          },
+          "outputs": {
+            "counts": {
+              "path": "counts.tsv",
+              "source": "results/counts.tsv"
+            }
+          },
+          "staging": "copy",
+          "workflow": "main.nf",
+          "workflow_source": "// Word count in Nextflow. Under portable emulation DAGonStar's mock engine\n// stands in for Nextflow and writes a placeholder for each declared output.\nparams.text = null\nparams.top = 10\n\nprocess COUNT {\n    publishDir 'results', mode: 'copy'\n\n    input:\n    path text\n\n    output:\n    path 'counts.tsv'\n\n    script:\n    \"\"\"\n    tr -s '[:space:]' '\\\\n' < $text | sort | uniq -c | sort -rn | head -n ${params.top} | awk '{print \\$2 \"\\\\t\" \\$1}' > counts.tsv\n    \"\"\"\n}\n\nworkflow {\n    COUNT(file(params.text))\n}\n"
+        },
+        "x": 420,
+        "y": 200
+      },
+      "explicit_prevs": [],
+      "meta": {
+        "engine": "nextflow",
+        "engine_options": {
+          "profile": "standard"
+        },
+        "inputs": {
+          "text": "workflow:///prepare/data/text.txt",
+          "top": 3
+        },
+        "outputs": {
+          "counts": {
+            "path": "counts.tsv",
+            "source": "results/counts.tsv"
+          }
+        },
+        "schema_version": 1,
+        "workflow": "meta_workflows/wordcount/main.nf"
+      },
+      "name": "wordcount",
+      "nexts": [
+        "report"
+      ],
+      "prevs": [
+        "prepare"
+      ],
+      "status": "READY",
+      "type": "meta",
+      "working_dir": null
+    }
+  }
+}

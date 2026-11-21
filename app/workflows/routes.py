@@ -16,7 +16,7 @@ from ..extensions import db
 from ..dagon_ini import dump_dagon_ini, parse_dagon_ini
 from ..models import ACTIVE_RUN_STATUSES, LINK_DATA, LINK_EXPLICIT, TaskRun, TaskType, Workflow, WorkflowLink, WorkflowTask, WorkflowRun
 from ..executor.local import timestamped_log, execute_workflow, export_cwl, is_geojson, list_directory, list_files, preview_task_file, safe_child, scratch_root
-from ..task_specs import INTERACTIVE_TASK_TYPES, CATEGORIES, TASK_SPECS, TASK_TYPE_LABELS, WORKFLOW_REFERENCE, config_from_document, dagon_task_arguments, editor_references, palette
+from ..task_specs import INTERACTIVE_TASK_TYPES, CATEGORIES, TASK_SPECS, TASK_TYPE_LABELS, WORKFLOW_REFERENCE, check_volume_provider, config_from_document, dagon_task_arguments, editor_references, palette
 from werkzeug.utils import secure_filename
 from ..interactive import coerce_form_values, form_document, form_env, form_fields, safe_filename
 from .forms import DAGONSTAR_NAME_RE, RunForm, WorkflowForm, WorkflowSetupForm
@@ -71,6 +71,7 @@ TEMPLATE_DESCRIPTIONS = {
     "agentic": "A producer and a bounded Agentic quality-control task (mock adapter).",
     "volume": "A shared DAGonFS volume: two writers, a stream between tasks, and a destroy task that stages results out.",
     "meta": "Batch → Meta (an external word-count engine run unmodified) → Batch.",
+    "meta_emulated": "Batch → Meta (a Nextflow word count) → Batch. The mock engine stands in for Nextflow, so no engine is needed.",
     "upload": "Upload a CSV on the run page, then see it as a table and a chart.",
     "form": "Fill a form on the run page; a Batch task reads the values from form.env.",
     "table": "A Batch task writes a CSV that the run page shows as a table.",
@@ -79,7 +80,9 @@ TEMPLATE_DESCRIPTIONS = {
 }
 # Templates for external back-ends enable DAGonStar portable emulation, so the
 # example runs locally until the real back-end is configured.
-EMULATED_TEMPLATES = {"slurm", "cloud", "docker", "kubernetes", "apptainer", "nomad", "llm", "volume"}
+EMULATED_TEMPLATES = {"slurm", "cloud", "docker", "kubernetes", "apptainer", "nomad", "llm", "volume", "meta_emulated"}
+# Templates that are not named after a task type: key → (label, task type used for the card icon).
+EXTRA_TEMPLATES = {"meta_emulated": ("Meta (emulated Nextflow)", "meta")}
 AGENTIC_TEMPLATE_INI = {
     "agent_provider.fixture": {"implementation": "mock"},
     "agent.quality-local": {
@@ -116,6 +119,31 @@ MEASUREMENTS_COMMAND = (
 
 # Meta template: a stand-in external engine with no DAGonStar dependency. It
 # reads the parameter document of DAGonStar's ``command`` adapter.
+NEXTFLOW_WORDCOUNT = (
+    "// Word count in Nextflow. Under portable emulation DAGonStar's mock engine\n"
+    "// stands in for Nextflow and writes a placeholder for each declared output.\n"
+    "params.text = null\n"
+    "params.top = 10\n"
+    "\n"
+    "process COUNT {\n"
+    "    publishDir 'results', mode: 'copy'\n"
+    "\n"
+    "    input:\n"
+    "    path text\n"
+    "\n"
+    "    output:\n"
+    "    path 'counts.tsv'\n"
+    "\n"
+    "    script:\n"
+    "    \"\"\"\n"
+    "    tr -s '[:space:]' '\\\\n' < $text | sort | uniq -c | sort -rn | head -n ${params.top} | awk '{print \\$2 \"\\\\t\" \\$1}' > counts.tsv\n"
+    "    \"\"\"\n"
+    "}\n"
+    "\n"
+    "workflow {\n"
+    "    COUNT(file(params.text))\n"
+    "}\n"
+)
 WORDCOUNT_ENGINE = (
     "\"\"\"Stand-in external engine: count the words of `text`.\"\"\"\n"
     "import json\n"
@@ -146,13 +174,18 @@ VOLUME_TOTAL_COMMAND = (
 
 
 def workflow_template_options() -> list[tuple[str, str]]:
-    return [("batch", "Batch diamond"), *[(task_type, label) for task_type, label in TASK_TYPE_LABELS.items() if task_type != "batch"]]
+    options = [("batch", "Batch diamond")]
+    for task_type, label in TASK_TYPE_LABELS.items():
+        if task_type != "batch":
+            options.append((task_type, label))
+        options.extend((key, extra[0]) for key, extra in EXTRA_TEMPLATES.items() if extra[1] == task_type)
+    return options
 
 
 def workflow_template_cards() -> list[dict]:
     cards = []
     for key, label in workflow_template_options():
-        spec = TASK_SPECS[key]
+        spec = TASK_SPECS[EXTRA_TEMPLATES[key][1] if key in EXTRA_TEMPLATES else key]
         description = TEMPLATE_DESCRIPTIONS.get(key) or spec.description
         if key in EMULATED_TEMPLATES:
             description += " Starts in portable emulation, so it runs locally until the back-end is configured."
@@ -168,7 +201,7 @@ def add_workflow_task(workflow: Workflow, name: str, task_type: str, x: int, y: 
 
 
 def apply_workflow_template(workflow: Workflow, template: str) -> None:
-    if template not in TASK_SPECS:
+    if template not in TASK_SPECS and template not in EXTRA_TEMPLATES:
         raise ValueError("Unknown workflow template.")
     if template == "batch":
         add_workflow_task(workflow, "extract", "batch", 120, 220, {"command": "echo hello > data.txt", "inputs": {}})
@@ -216,6 +249,17 @@ def apply_workflow_template(workflow: Workflow, template: str) -> None:
             "environment": {}, "staging": "copy",
         })
         add_workflow_task(workflow, "report", "batch", 720, 200, {"command": "head -n 1 workflow:///wordcount/outputs/counts.tsv > top.txt", "inputs": {}})
+    elif template == "meta_emulated":
+        add_workflow_task(workflow, "prepare", "batch", 120, 200, {"command": "mkdir -p data\nprintf 'sea wind sea wave sea wind\\n' > data/text.txt", "inputs": {}})
+        add_workflow_task(workflow, "wordcount", "meta", 420, 200, {
+            "engine": "nextflow", "workflow": "main.nf", "workflow_source": NEXTFLOW_WORDCOUNT,
+            "inputs": {"text": "workflow:///prepare/data/text.txt", "top": 3},
+            "outputs": {"counts": {"path": "counts.tsv", "source": "results/counts.tsv"}},
+            "engine_options": {"profile": "standard"},
+            "environment": {}, "staging": "copy",
+        })
+        add_workflow_task(workflow, "report", "batch", 720, 200, {"command": "cp workflow:///wordcount/outputs/counts.tsv report.txt", "inputs": {}})
+        workflow.runtime_options = {**workflow.runtime_options, "portable_emulation": True}
     elif template in ("table", "chart", "download"):
         add_workflow_task(workflow, "measure", "batch", 120, 200, {"command": MEASUREMENTS_COMMAND, "inputs": {}})
         source = {"source": "workflow:///measure/outputs/measurements.csv"}
@@ -479,6 +523,8 @@ def validate_graph_payload(payload: object) -> tuple[list[dict], list[dict]]:
             raise ValueError("Unsupported task type.")
         if not isinstance(task.get("config", {}), dict):
             raise ValueError("Task configuration must be an object.")
+        if task.get("task_type") == "volume":
+            check_volume_provider(name, task.get("config", {}))
         try:
             int(task.get("x", 100))
             int(task.get("y", 100))

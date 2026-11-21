@@ -15,8 +15,8 @@
       <ul class="dropdown-menu dropdown-menu-end">
         <li><a class="dropdown-item" href="{{ url_for('workflows.create_workflow') }}">Default empty workflow</a></li>
         <li><hr class="dropdown-divider"></li>
-        {% for template, label in template_options %}
-          <li><a class="dropdown-item" href="{{ url_for('workflows.create_workflow', template=template) }}">{{ specs[template].icon }} {{ label }}</a></li>
+        {% for card in template_cards %}
+          <li><a class="dropdown-item" href="{{ url_for('workflows.create_workflow', template=card.key) }}">{{ card.icon }} {{ card.label }}</a></li>
         {% endfor %}
       </ul>
     </div>

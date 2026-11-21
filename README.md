@@ -15,7 +15,7 @@ The project targets **DAGonStar 3.0.0** (pinned in [requirements.txt](requiremen
   - Containers: Docker, Kubernetes, Apptainer, Nomad.
   - Cloud, web and devices: Cloud, FaaS, Web, IoT.
   - Python and AI: Native, LLM, Agentic.
-  - Volumes and meta-workflows: Volume (create or destroy an ad-hoc file-system volume) and Meta (run a Nextflow, Snakemake, Parsl, StreamFlow, CWL or command-line workflow unmodified) ([docs](docs/volumes_and_meta.md)).
+  - Volumes and meta-workflows: Volume (create or destroy an ad-hoc file-system volume) and Meta (run a Nextflow, Snakemake, Parsl, StreamFlow, CWL or command-line workflow unmodified, or the engine-free `mock` adapter) ([docs](docs/volumes_and_meta.md)).
   - DAGonWeb interactive: Upload, Form, Table, Chart, Download. They pause a run for files or form answers and show tables, charts and downloads on the run page, yet stay plain DAGonStar `batch` tasks in the document ([docs](docs/interactive_tasks.md)).
 - **LLM workflow assistant.** An agent with tools designs, edits and dry-runs the workflow as a draft, from a plain-language description; you apply the draft to the canvas. It works with OpenAI and any OpenAI-compatible endpoint ([docs](docs/assistant.md)).
 - **Generated from one registry.** The palette and the inspector forms come from [app/task_specs.py](app/task_specs.py), and so does the code that builds each runtime `DagonTask`.
@@ -35,7 +35,7 @@ The project targets **DAGonStar 3.0.0** (pinned in [requirements.txt](requiremen
   - DAGonWeb JSON, portable DAGonStar JSON, and CWL v1.2 (DAGonStar's `saveAsCWL`).
   - **Import** a JSON document, a DAGonStar Python program, or a ZIP application. Python is read by static analysis and never executed. The round trip is lossless: exporting an imported program gives back working, commented Python with its comments and layout.
 - **Runtime options** per workflow: `max_threads`, `pre_stage` (stage inputs ahead of scheduling), `portable_emulation`, an optional FAIR provenance profile, and a guided `dagon.ini` editor.
-- **Template gallery.** There is one runnable template per task type. They are also exported as [examples/](examples).
+- **Template gallery.** There is one runnable template per task type, plus a Meta template with an emulated Nextflow workflow. They are also exported as [examples/](examples).
 - **Interface.**
   - Light, dark and automatic themes.
   - The Monaco editor for every multi-line text field, with syntax highlighting and context-aware completion: `workflow:///` references, shell `$inputs`, Python, JSON schemas from the task registry, and `dagon.ini` sections and keys ([docs](docs/text_editing.md)).
@@ -202,8 +202,8 @@ erDiagram
 | Python & AI | Native | Python callable with staged inputs. Its requirements are installed into a per-run virtual environment. |
 | | LLM | OpenAI-compatible chat completion that uses `[llm.<name>]` profiles from `dagon.ini`. |
 | | Agentic | Bounded agent contract with requirements and coverage checks. It uses `[agent.*]` and `[agent_provider.*]` profiles. |
-| Volumes & meta-workflows | Volume | Creates an ad-hoc file-system volume (DAGonFS, Hercules, CAPIO, DynoStore) that other tasks share as `workflow:///<task>/<volume>/...`, or destroys it and stages results out. |
-| | Meta | Runs a workflow written for Nextflow, Snakemake, Parsl, StreamFlow, a CWL runner or any command-line engine, as one task. The definition can be written inline. |
+| Volumes & meta-workflows | Volume | Creates an ad-hoc file-system volume (DAGonFS, Hercules, CAPIO, DynoStore or a registered provider; not BeeOND, which belongs to Slurm tasks) that other tasks share as `workflow:///<task>/<volume>/...`, or destroys it and stages results out. |
+| | Meta | Runs a workflow written for Nextflow, Snakemake, Parsl, StreamFlow, a CWL runner or any command-line engine, as one task. The definition can be written inline. Under portable emulation the `mock` engine stands in for the real one. |
 | DAGonWeb interactive | Upload, Form | Pause the run until a user uploads files or fills a form on the run page (headless: `--input` / `--form`). |
 | | Table, Chart, Download | Turn CSV/JSON results into a table, a Chart.js chart (plus SVG), or download buttons. |
 

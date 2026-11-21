@@ -17,8 +17,12 @@ All of them are saved in the plain DAGonStar document, so
 
 A Volume task with the **create** action starts one ad-hoc file-system volume
 as a node of the graph. The providers are DAGonFS, Hercules, CAPIO and
-DynoStore. BeeOND volumes exist only inside a Slurm allocation, so they are
-set on Slurm tasks instead (see below).
+DynoStore, plus any provider registered with DAGonStar
+(`dagon.adhoc.register_provider` or the `dagon.adhoc_providers` entry point)
+in the server's Python environment. BeeOND volumes exist only inside a Slurm
+allocation, so DAGonStar refuses them in volume tasks. DAGonWeb does not offer
+BeeOND as a provider, and it refuses a saved, imported or run document whose
+create volume task names it. Set BeeOND on Slurm tasks instead (see below).
 
 | Field | Meaning |
 | --- | --- |
@@ -81,7 +85,7 @@ its documented command line.
 
 | Field | Meaning |
 | --- | --- |
-| Engine | `command`, `nextflow`, `snakemake`, `parsl`, `streamflow` or `cwl`. |
+| Engine | `command`, `nextflow`, `snakemake`, `parsl`, `streamflow`, `cwl` or `mock`, plus any adapter registered with DAGonStar. `mock` starts no engine and writes a placeholder per output. |
 | Workflow definition | A file name (with an inline source), a path on the execution host, or an engine-resolved name such as `nextflow-io/hello`. |
 | Workflow source | Optional. DAGonWeb writes it as the definition file. The editor highlights it from the file extension. |
 | Inputs | Name → value. A `workflow:///` string is staged (file or directory) and passed to the engine as an absolute path. |
@@ -120,6 +124,11 @@ volume as `$DAGON_BEEOND`.
 - **Meta** (`examples/meta.json`): `prepare → wordcount → report`. The
   `wordcount` task runs an inline Python stand-in engine through the `command`
   adapter, so it runs without Nextflow or Snakemake.
+- **Meta (emulated Nextflow)** (`examples/meta_emulated.json`): the same graph
+  with an inline Nextflow `main.nf`. It starts in portable emulation, so
+  DAGonStar's mock engine stands in for Nextflow: `report` receives the JSON
+  placeholder the mock engine writes for the `counts` output. Turn portable
+  emulation off in **Setup** to run it with a real Nextflow.
 
 ## Not in the document
 
