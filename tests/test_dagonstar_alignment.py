@@ -13,7 +13,7 @@ from app.config import TestConfig
 from app.executor.local import build_runtime_workflow, execute_workflow
 from app.extensions import db
 from app.models import LINK_EXPLICIT, Setting, TaskType, User, Workflow, WorkflowLink, WorkflowRun, WorkflowTask
-from app.task_specs import TASK_SPECS, config_from_document, dagon_task_arguments, normalize_command_references, palette, runtime_command
+from app.task_specs import TASK_SPECS, config_from_document, dagon_task_arguments, normalize_command_references, palette, runtime_command, runtime_type
 from app.workflows.routes import apply_workflow_document, apply_workflow_template, validate_graph_payload, workflow_python_source
 
 LOCAL_CONFIG = {"batch": {"scratch_dir_base": "/tmp", "remove_dir": False}, "ftp_pub": {}, "dagon_service": {"use": "False"}}
@@ -416,7 +416,7 @@ def test_stream_references_keep_the_path_and_query_apart():
     assert [(link["source_name"], link["source_output"], link["target_name"]) for link in links] == [("emit", "numbers", "total")]
 
 
-@pytest.mark.parametrize("template", ["volume", "meta"])
+@pytest.mark.parametrize("template", ["volume", "meta", "meta_emulated"])
 def test_volume_and_meta_documents_load_with_dagonstar(app, template, tmp_path, monkeypatch):
     from dagon import Workflow as DagonStarWorkflow
 
@@ -429,10 +429,14 @@ def test_volume_and_meta_documents_load_with_dagonstar(app, template, tmp_path, 
         assert document["tasks"]["release"]["volume"]["action"] == "destroy"
         assert document["tasks"]["scratch"]["volume"]["provider"] == "dagonfs"
         assert config_from_document(document["tasks"]["release"]) == {"action": "destroy", "volume": "workflow:///scratch/shared", "stage_out": {"results": {"path": "results", "type": "directory"}}, "release": "auto"}
-    else:
+    elif template == "meta":
         meta = document["tasks"]["wordcount"]["meta"]
         assert meta["workflow"] == "meta_workflows/wordcount/wordcount.py"
         assert "workflow_source" not in meta and meta["engine"] == "command"
+    else:
+        meta = document["tasks"]["wordcount"]["meta"]
+        assert meta["workflow"] == "meta_workflows/wordcount/main.nf" and meta["engine"] == "nextflow"
+        assert document["dagonweb"]["runtime"]["portable_emulation"] is True
 
 
 def test_slurm_beeond_option_reaches_dagonstar():
@@ -460,3 +464,90 @@ def test_meta_inline_source_needs_a_plain_file_name():
     with pytest.raises(ValueError):
         meta_specification("m", {"engine": "command", "workflow": "../x.py", "workflow_source": "print(1)"})
     assert meta_specification("m", {"engine": "nextflow", "workflow": "nextflow-io/hello"})["workflow"] == "nextflow-io/hello"
+
+
+def test_meta_emulated_template_runs_without_an_engine(app):
+    with app.app_context():
+        workflow = new_workflow("E2E_meta_emulated", "meta_emulated")
+        assert workflow.runtime_options.get("portable_emulation") is True
+        run = WorkflowRun(workflow_id=workflow.id, user_id=workflow.owner_id, status="pending", scratch_path="", log="")
+        db.session.add(run)
+        db.session.commit()
+        run = execute_workflow(workflow, workflow.owner_id, run)
+        assert run.status == "success", run.log
+        report = next(task_run for task_run in run.task_runs if task_run.task_uid == "report")
+        placeholder = json.loads((Path(report.scratch_path) / "report.txt").read_text(encoding="utf-8"))
+        # DAGonStar's mock engine stood in for Nextflow and recorded the staged input.
+        assert placeholder["portable_emulation"] is True and placeholder["engine"] == "nextflow"
+        assert placeholder["output"] == "counts" and "sha256" in placeholder["inputs"]["text"]
+        assert (Path(run.scratch_path) / "_dagonweb" / "meta_workflows" / "wordcount" / "main.nf").is_file()
+
+
+def test_meta_engines_and_volume_providers_follow_dagonstar():
+    from dagon.adhoc import available_providers
+    from dagon.meta.adapters import adapter_names
+
+    from app.task_specs import META_ENGINES, VOLUME_PROVIDERS
+
+    assert set(META_ENGINES) == set(adapter_names()) and "mock" in META_ENGINES
+    assert set(VOLUME_PROVIDERS) == set(available_providers()) - {"beeond"}
+    fields = {field["key"]: field for field in TASK_SPECS["volume"].fields}
+    assert "beeond" not in fields["provider"]["options"]
+    assert "mock" in {field["key"]: field for field in TASK_SPECS["meta"].fields}["engine"]["options"]
+
+
+def test_volume_tasks_refuse_beeond_like_dagonstar():
+    from dagon.task import DagonTask, TaskType as DagonTaskType
+
+    with pytest.raises(ValueError, match="BeeOND"):
+        DagonTask(DagonTaskType.VOLUME, "v", provider="beeond")
+    with pytest.raises(ValueError, match="BeeOND"):
+        dagon_task_arguments("volume", "v", {"action": "create", "provider": "beeond", "volume": "v"})
+    document = {"name": "B", "tasks": {"v": {"name": "v", "type": "volume", "volume": {"action": "create", "provider": "BeeOND", "volume": "v"}}}}
+    with pytest.raises(ValueError, match="BeeOND"):
+        validate_graph_payload(document)
+    # A destroy task names no provider, so the check does not apply to it.
+    dagon_task_arguments("volume", "d", {"action": "destroy", "volume": "workflow:///v/v"})
+
+
+def test_every_volume_and_meta_field_round_trips_through_load_json(tmp_path, monkeypatch):
+    """Editor config → DAGonStar document → load_json → as_json → editor config."""
+    from dagon import Workflow as DagonStarWorkflow
+
+    from app.task_specs import document_fields
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "flow.nf").write_text("workflow {}\n", encoding="utf-8")
+    configs = {
+        "prepare": ("batch", {"command": "mkdir -p data && echo 1 > data/n.txt"}),
+        "scratch": ("volume", {"action": "create", "provider": "dagonfs", "volume": "gulf", "release": "end", "export": "GULF",
+                               "options": {"frontend": "fuse3"}, "stage_in": {"inputs/n.txt": {"path": "workflow:///prepare/data/n.txt", "type": "file"}}}),
+        "model": ("meta", {"engine": "nextflow", "workflow": str(tmp_path / "flow.nf"), "inputs": {"n": "workflow:///scratch/gulf/inputs/n.txt", "top": 3},
+                           "outputs": {"out": {"path": "out.txt", "source": "results/out.txt", "type": "file", "required": True}},
+                           "engine_options": {"profile": "standard"}, "environment": {"NXF_ANSI_LOG": "false"}, "timeout": 90, "staging": "symlink"}),
+        "release": ("volume", {"action": "destroy", "volume": "workflow:///scratch/gulf", "release": "auto",
+                               "stage_out": {"results": {"path": "results", "type": "directory"}}}),
+    }
+    tasks = {}
+    for name, (task_type, config) in configs.items():
+        tasks[name] = {"name": name, "type": runtime_type(task_type), **document_fields(task_type, config, name)}
+    tasks["model"]["prevs"] = ["scratch"]
+    tasks["release"]["prevs"] = ["model"]
+    document = {"name": "RoundTrip", "id": None, "host": "localhost", "tasks": tasks}
+    loaded = DagonStarWorkflow("RoundTrip", config=LOCAL_CONFIG, jsonload=json.loads(json.dumps(document)))
+    exported = {task.name: task.as_json() for task in loaded.tasks}
+    for name, (task_type, config) in configs.items():
+        if task_type == "batch":
+            continue
+        assert config_from_document({**exported[name], "type": task_type}) == config, name
+
+
+@pytest.mark.parametrize("template", ["volume", "meta", "meta_emulated"])
+def test_cwl_export_covers_volume_and_meta_tasks(app, template):
+    with app.app_context():
+        workflow_id = new_workflow(f"Cwl_{template}", template).id
+    response = login(app).get(f"/workflows/{workflow_id}/cwl")
+    assert response.status_code == 200, response.data[:500]
+    assert b"cwlVersion" in response.data
+    step = b"scratch" if template == "volume" else b"wordcount"
+    assert step in response.data

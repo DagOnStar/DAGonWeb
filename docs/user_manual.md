@@ -8,7 +8,7 @@ Visitors who are not signed in can open **Try it**, pick a template, edit it, an
 
 Create a workflow from the Workflows page in one of three ways:
 
-- Pick a template from the gallery. There is one runnable template per task type.
+- Pick a template from the gallery. There is one runnable template per task type, plus **Meta (emulated Nextflow)**, which runs a Nextflow workflow through DAGonStar's mock engine.
 - Drop or choose a file in the import area: a DAGonStar JSON document, a DAGonStar Python program (`.py`), or a ZIP of a DAGonStar application. See [Import and export](import_export.md). The [examples/](../examples) folder has a JSON document for every task type.
 - Use **New workflow** to start from an empty canvas, or **✨ Design with assistant** to describe the workflow to the [LLM assistant](assistant.md) (when an administrator has enabled it).
 

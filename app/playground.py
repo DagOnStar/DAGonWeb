@@ -47,9 +47,10 @@ def index():
 @bp.get("/<template>")
 def editor(template: str):
     _require_enabled()
-    if template != "empty" and template not in TASK_SPECS:
+    from .workflows.routes import TEMPLATE_DESCRIPTIONS, palette, workflow_template_options
+
+    if template != "empty" and template not in dict(workflow_template_options()):
         abort(404)
-    from .workflows.routes import TEMPLATE_DESCRIPTIONS, palette
 
     name = "my_workflow" if template == "empty" else f"{template}_example"
     return render_template(
@@ -73,9 +74,10 @@ def template_json(template: str):
     _require_enabled()
     if template == "empty":
         return jsonify({"name": "my_workflow", "id": None, "host": "localhost", "tasks": {}, "dagonweb": {"runtime": {"portable_emulation": True}}})
-    if template not in TASK_SPECS:
+    from .workflows.routes import template_document, workflow_template_options
+
+    if template not in dict(workflow_template_options()):
         abort(404)
-    from .workflows.routes import template_document
 
     owner = User.query.order_by(User.id).first()
     if owner is None:

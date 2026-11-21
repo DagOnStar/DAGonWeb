@@ -146,9 +146,47 @@ HTTP_STATUS_SCHEMA: dict[str, Any] = {
 
 
 VOLUME_ACTIONS = ("create", "destroy")
-VOLUME_PROVIDERS = ("dagonfs", "hercules", "capio", "dynostore")
+# BeeOND volumes live only inside a Slurm allocation: DAGonStar refuses them in
+# volume tasks, so DAGonWeb never offers them there (see ``check_volume_provider``).
+VOLUME_REFUSED_PROVIDERS = ("beeond",)
 VOLUME_RELEASE = ("auto", "end")
-META_ENGINES = ("command", "nextflow", "snakemake", "parsl", "streamflow", "cwl")
+
+
+def _registered_names(builtin: tuple[str, ...], module: str, function: str, refused: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """Built-in names first, then the ones DAGonStar has registered (entry points included).
+
+    DAGonStar is optional here so the registry stays importable without it.
+    """
+    try:
+        names = getattr(__import__(module, fromlist=[function]), function)()
+    except Exception:  # pragma: no cover - DAGonStar missing or a broken plug-in
+        names = []
+    extra = sorted({str(name).lower() for name in names} - set(builtin) - set(refused))
+    return builtin + tuple(extra)
+
+
+VOLUME_PROVIDERS = _registered_names(("dagonfs", "hercules", "capio", "dynostore"), "dagon.adhoc", "available_providers", VOLUME_REFUSED_PROVIDERS)
+META_ENGINES = _registered_names(("command", "nextflow", "snakemake", "parsl", "streamflow", "cwl", "mock"), "dagon.meta.adapters", "adapter_names")
+PROVIDER_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
+def check_volume_provider(name: str, config: dict[str, Any]) -> None:
+    """Refuse a create volume task whose provider DAGonStar cannot create."""
+    config = config or {}
+    if (config.get("action") or "create") != "create":
+        return
+    provider = str(config.get("provider") or "").strip().lower()
+    if not provider:
+        raise ValueError(f"Volume task {name}: a create volume task needs a provider.")
+    if provider in VOLUME_REFUSED_PROVIDERS:
+        raise ValueError(
+            f"Volume task {name}: BeeOND volumes exist only inside a Slurm allocation and cannot be created by a volume task; "
+            "use the BeeOND option of the Slurm tasks instead."
+        )
+    if not PROVIDER_NAME.match(provider):
+        raise ValueError(f"Volume task {name}: provider names may contain letters, digits, '.', '_' and '-'.")
+
+
 # File names DAGonWeb may write a meta-task workflow definition to.
 META_WORKFLOW_FILE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}$")
 META_WORKFLOWS_DIR = "meta_workflows"
@@ -540,7 +578,7 @@ TASK_SPECS: dict[str, TaskSpec] = {
             },
             [
                 _f("action", "Action", "select", options=list(VOLUME_ACTIONS), help="<em>create</em> starts the volume; an optional <em>destroy</em> task stages results out and releases it."),
-                _f("provider", "Provider", "select", options=list(VOLUME_PROVIDERS), show_when={"action": ["create"]}, help="Ad-hoc file system serving the volume. Portable emulation uses a local directory instead."),
+                _f("provider", "Provider", "select", options=list(VOLUME_PROVIDERS), show_when={"action": ["create"]}, help="Ad-hoc file system serving the volume (built-in or registered with DAGonStar). BeeOND is not offered: it belongs to Slurm tasks. Portable emulation uses a local directory instead."),
                 _f(
                     "volume",
                     "Volume",
@@ -584,7 +622,7 @@ TASK_SPECS: dict[str, TaskSpec] = {
                 "staging": "copy",
             },
             [
-                _f("engine", "Engine", "select", options=list(META_ENGINES), help="Adapter that runs the external workflow. Portable emulation uses the mock engine."),
+                _f("engine", "Engine", "select", options=list(META_ENGINES), help="Adapter that runs the external workflow. <em>mock</em> starts no engine and writes placeholder outputs; portable emulation uses it for every engine."),
                 _f(
                     "workflow",
                     "Workflow definition",
@@ -965,6 +1003,7 @@ def dagon_task_arguments(task_type: str, name: str, config: dict[str, Any]) -> t
         return [], kwargs
 
     if task_type == "volume":
+        check_volume_provider(name, config)
         return [name], volume_specification(config)
 
     if task_type == "meta":
