@@ -177,4 +177,6 @@ def _would(task_type: str) -> str:
         "native": "Call the Python function in a per-run virtual environment.",
         "llm": "Send the prompt to the configured LLM (locally emulated in portable mode).",
         "agentic": "Run the bounded agent contract (locally emulated in portable mode).",
+        "volume": "Create or destroy the ad-hoc file-system volume (a local directory in portable mode).",
+        "meta": "Run the external workflow with its own engine (the mock engine in portable mode).",
     }.get(task_type, "Run the command in its own working directory (container and scheduler back-ends are emulated locally in portable mode).")

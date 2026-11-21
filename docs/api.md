@@ -50,10 +50,10 @@ Creating and importing workflows needs `workflows.create`, starting or resuming 
 
 ## Document format
 
-The document uses `tasks` keyed by task name. Each task has the fields that DAGonStar 2.9 writes in `Workflow.as_json()`:
+The document uses `tasks` keyed by task name. Each task has the fields that DAGonStar 3.0 writes in `Workflow.as_json()`:
 
 - Common fields: `name`, `type`, `command`, `prevs`, `nexts`, `explicit_prevs`, `status`, `working_dir`.
-- The fields of its own task type, for example `image` for Docker, `partition` and `time` for Slurm, `callable` for Native, or `specification` for Web and FaaS.
+- The fields of its own task type, for example `image` for Docker, `partition` and `time` for Slurm, `callable` for Native, `specification` for Web and FaaS, `beeond` for Slurm, `volume` for Volume tasks (`action`, `provider`, `volume`, `stage_in`/`stage_out`, `options`, `export`, `release`), and `meta` for Meta tasks (`engine`, `workflow`, `inputs`, `outputs`, `engine_options`, `environment`, `timeout`, `staging`). An inline Meta workflow definition stays in `dagonweb.config.workflow_source`; `meta.workflow` is then `meta_workflows/<task>/<file>`.
 
 A top-level `pre_stage` is written when scheduler-aware pre-staging is enabled.
 
@@ -64,7 +64,7 @@ DAGonWeb-only state lives in additive `dagonweb` objects:
 
 On import, `prevs` and `nexts` are ignored. Local links are inferred in two ways:
 
-- **Data links** come from `workflow:///producer/path` and `workflow://<current workflow>/producer/path` references.
+- **Data links** come from `workflow:///producer/path` and `workflow://<current workflow>/producer/path` references. A `?stream` or `?stream=<volume>` query is not part of the link path.
 - **Explicit dependencies** come from `explicit_prevs`. A plain DAGonStar document without `explicit_prevs` treats its legacy `prevs` as explicit edges, the same way DAGonStar does.
 
 References to other workflow names stay in the task configuration but do not create local links. Unknown tasks, self references, and cycles are rejected; a cycle error names the tasks in the cycle.

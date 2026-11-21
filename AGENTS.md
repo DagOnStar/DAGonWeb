@@ -5,8 +5,8 @@ DAGonWeb is a Flask/Bootstrap Progressive Web Application for creating, editing,
 
 ## Goals
 - Keep the project simple, readable, and deployable with Docker Compose.
-- Use DAGonStar as the execution runtime. The supported version is pinned in `requirements.txt`, currently 2.9.4 with the `docker` and `kubernetes` extras.
-- Build data dependencies from `workflow:///<task>/<path>` references and explicit dependencies from `explicit_prevs`. Never use imported `prevs` or `nexts` fields, except as the DAGonStar fallback: a document without `explicit_prevs` treats its legacy `prevs` as explicit edges. `WorkflowLink.kind` is either `data` or `explicit`.
+- Use DAGonStar as the execution runtime. The supported version is pinned in `requirements.txt`, currently 3.0.0 with the `docker` and `kubernetes` extras.
+- Build data dependencies from `workflow:///<task>/<path>` references (an optional `?stream[=<volume>]` query marks a stream; it is not part of the path) and explicit dependencies from `explicit_prevs`. Never use imported `prevs` or `nexts` fields, except as the DAGonStar fallback: a document without `explicit_prevs` treats its legacy `prevs` as explicit edges. `WorkflowLink.kind` is either `data` or `explicit`.
 - `app/task_specs.py` is the single registry of task types. It defines the palette and Inspector fields, the default configs, the DAGonStar document fields, and the `DagonTask` arguments. To add a DAGonStar option, change the registry rather than the templates or the JavaScript.
 - DAGonWeb interactive task types (Upload, Form, Table, Chart, Download) are registered in `app/task_specs.py` with `dagon_type="batch"`; their scripts live in `app/interactive.py`. In the document their `type` is `batch` and the DAGonWeb kind is `dagonweb.task_type`.
 - Python export and import live in `app/pycode.py`. Import uses `ast` only and must never execute uploaded code. Exporting an imported workflow must give back working, commented Python (round-trip tests in `tests/test_platform.py`).
@@ -18,6 +18,7 @@ DAGonWeb is a Flask/Bootstrap Progressive Web Application for creating, editing,
 - Treat scratch directories as potentially sensitive. Never expose arbitrary filesystem paths outside the configured scratch root.
   - Task directories, the checkpoint (`run_<id>/_dagonweb/checkpoint.json`), native virtual environments, and CWL exports all live inside the run directory or the scratch root.
   - `workflow_config()` must keep forcing `[batch] scratch_dir_base` and `remove_dir=False` after merging the per-workflow ini.
+- Inline Meta workflow definitions (`workflow_source`) are written to `<run>/_dagonweb/meta_workflows/<task>/<file>` (locally and by `hpc/dagonweb_runner.py`) and to `<workdir>/meta_workflows/...` by the generated Python program; the document keeps only the relative path.
 - Runtime options (`portable_emulation`, `pre_stage`, `max_threads`) live in `dagonweb.runtime`. Templates for remote back-ends start with portable emulation on, so every template runs locally.
 - Keep all documentation updated.
 - Keep all examples updated. `examples/*.json` are generated from the built-in templates with `flask --app wsgi export-examples`. A test fails when they are stale.

@@ -1,4 +1,4 @@
-"""DAGonStar 2.9 alignment: task types, explicit edges, runtime, exports."""
+"""DAGonStar 3.0 alignment: task types, explicit edges, runtime, exports."""
 from __future__ import annotations
 
 import json
@@ -204,6 +204,16 @@ def test_every_template_runs_end_to_end(app, template):
         if template == "form":
             use = next(task_run for task_run in run.task_runs if task_run.task_uid == "use_values")
             assert (Path(use.scratch_path) / "summary.txt").read_text(encoding="utf-8") == "Threshold 0.5 for experiment\n"
+        if template == "volume":
+            # Squares written into the shared volume, staged out by the destroy
+            # task, plus the sum streamed from emit to total while emit ran.
+            report = next(task_run for task_run in run.task_runs if task_run.task_uid == "report")
+            assert (Path(report.scratch_path) / "report.txt").read_text(encoding="utf-8") == "1\n4\n9\n16\n25\n15\n"
+        if template == "meta":
+            report = next(task_run for task_run in run.task_runs if task_run.task_uid == "report")
+            assert (Path(report.scratch_path) / "top.txt").read_text(encoding="utf-8") == "sea\t3\n"
+            # The inline engine source is written inside the run directory.
+            assert (scratch / "_dagonweb" / "meta_workflows" / "wordcount" / "wordcount.py").is_file()
         if template in ("table", "chart", "upload", "download"):
             produced = {path.name for task_run in run.task_runs for path in Path(task_run.scratch_path).glob("outputs/*")}
             assert {"table.json", "chart.json", "chart.svg", "results.zip"} & produced
@@ -388,3 +398,65 @@ def test_examples_import_and_build(app, example):
         assert sorted(task.name for task in workflow.tasks) == sorted(document["tasks"])
         expected_links = sum(len(task["prevs"]) for task in document["tasks"].values())
         assert len(workflow.links) == expected_links
+
+
+def test_stream_references_keep_the_path_and_query_apart():
+    from app.task_specs import WORKFLOW_REFERENCE
+
+    match = WORKFLOW_REFERENCE.search("items workflow:///emit/numbers?stream=shared --into got")
+    assert (match.group("task"), match.group("path"), match.group("query")) == ("emit", "numbers", "stream=shared")
+    assert WORKFLOW_REFERENCE.search("x workflow:///emit/numbers?stream").group("query") == "stream"
+    # Any other "?" stays in the path, as in DAGonStar.
+    assert WORKFLOW_REFERENCE.search("cat workflow:///a/out?.txt").group("path") == "out?.txt"
+    document = {"name": "S", "tasks": {
+        "emit": {"name": "emit", "type": "batch", "command": "echo 1"},
+        "total": {"name": "total", "type": "batch", "command": "cat workflow:///emit/numbers?stream=v > t.txt"},
+    }}
+    _, links = validate_graph_payload(document)
+    assert [(link["source_name"], link["source_output"], link["target_name"]) for link in links] == [("emit", "numbers", "total")]
+
+
+@pytest.mark.parametrize("template", ["volume", "meta"])
+def test_volume_and_meta_documents_load_with_dagonstar(app, template, tmp_path, monkeypatch):
+    from dagon import Workflow as DagonStarWorkflow
+
+    monkeypatch.chdir(tmp_path)
+    with app.app_context():
+        document = new_workflow(f"Load_{template}", template).as_json()
+    loaded = DagonStarWorkflow(document["name"], config=LOCAL_CONFIG, jsonload=document)
+    assert {task.name for task in loaded.tasks} == set(document["tasks"])
+    if template == "volume":
+        assert document["tasks"]["release"]["volume"]["action"] == "destroy"
+        assert document["tasks"]["scratch"]["volume"]["provider"] == "dagonfs"
+        assert config_from_document(document["tasks"]["release"]) == {"action": "destroy", "volume": "workflow:///scratch/shared", "stage_out": {"results": {"path": "results", "type": "directory"}}, "release": "auto"}
+    else:
+        meta = document["tasks"]["wordcount"]["meta"]
+        assert meta["workflow"] == "meta_workflows/wordcount/wordcount.py"
+        assert "workflow_source" not in meta and meta["engine"] == "command"
+
+
+def test_slurm_beeond_option_reaches_dagonstar():
+    args, kwargs = dagon_task_arguments("slurm", "s", {"command": "hostname", "beeond": "task"})
+    assert kwargs["beeond"] == "task"
+    assert config_from_document({"type": "slurm", "command": "hostname", "beeond": {"mountpoint": "/mnt/b"}})["beeond"] == {"mountpoint": "/mnt/b"}
+    assert "beeond" not in dagon_task_arguments("slurm", "s", {"command": "hostname", "beeond": ""})[1]
+
+
+def test_generated_python_program_runs_meta_tasks(app, tmp_path):
+    with app.app_context():
+        workflow = new_workflow("GeneratedMeta", "meta")
+        source = workflow_python_source(workflow)
+    assert "META_SOURCES" in source and "install_meta_workflows(workdir)" in source
+    program = tmp_path / "GeneratedMeta.py"
+    program.write_text(source, encoding="utf-8")
+    completed = subprocess.run([sys.executable, str(program)], cwd=tmp_path, capture_output=True, text=True, timeout=120)
+    assert completed.returncode == 0, completed.stderr[-2000:]
+    assert (tmp_path / "scratch" / "meta_workflows" / "wordcount" / "wordcount.py").is_file()
+
+
+def test_meta_inline_source_needs_a_plain_file_name():
+    from app.task_specs import meta_specification
+
+    with pytest.raises(ValueError):
+        meta_specification("m", {"engine": "command", "workflow": "../x.py", "workflow_source": "print(1)"})
+    assert meta_specification("m", {"engine": "nextflow", "workflow": "nextflow-io/hello"})["workflow"] == "nextflow-io/hello"

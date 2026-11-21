@@ -66,18 +66,22 @@
     svg.setAttribute('width', width);
     svg.setAttribute('height', height);
     svg.innerHTML = `<defs><marker id="runArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="var(--dw-link)"/></marker>
-      <marker id="runArrowExplicit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="var(--dw-link-explicit)"/></marker></defs>`;
+      <marker id="runArrowExplicit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="var(--dw-link-explicit)"/></marker>
+      <marker id="runArrowStream" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="var(--dw-link-stream)"/></marker></defs>`;
     tasks.forEach(target => (target.prevs || []).forEach(sourceName => {
       const source = graph.tasks[sourceName];
       if (!source) return;
       const explicit = (target.explicit_prevs || []).includes(sourceName);
+      const config = JSON.stringify(target.dagonweb?.config || {});
+      const escapedName = sourceName.replace(/[-]/g, '\\-');
+      const stream = !explicit && new RegExp(`workflow://[A-Za-z0-9_-]*/${escapedName}/[^\\s"]+?\\?stream`).test(config);
       const a = { x: (source.dagonweb?.x ?? 100) + NODE_WIDTH, y: (source.dagonweb?.y ?? 100) + nodeHeight(sourceName) / 2 };
       const b = { x: target.dagonweb?.x ?? 100, y: (target.dagonweb?.y ?? 100) + nodeHeight(target.name) / 2 };
       const bend = Math.max(50, Math.abs(b.x - a.x) / 2);
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path.setAttribute('class', `link-line${explicit ? ' explicit' : ''}`);
+      path.setAttribute('class', `link-line${explicit ? ' explicit' : ''}${stream ? ' stream' : ''}`);
       path.setAttribute('d', `M ${a.x} ${a.y} C ${a.x + bend} ${a.y}, ${b.x - bend} ${b.y}, ${b.x} ${b.y}`);
-      path.setAttribute('marker-end', `url(#${explicit ? 'runArrowExplicit' : 'runArrow'})`);
+      path.setAttribute('marker-end', `url(#${explicit ? 'runArrowExplicit' : stream ? 'runArrowStream' : 'runArrow'})`);
       svg.appendChild(path);
     }));
   }
@@ -359,7 +363,7 @@
 
   function chartColors(count) {
     const styles = getComputedStyle(document.documentElement);
-    const base = ['--dw-cat-shell', '--dw-cat-python_ai', '--dw-cat-containers', '--dw-cat-services', '--dw-cat-interactive', '--dw-link-explicit'].map(name => styles.getPropertyValue(name).trim());
+    const base = ['--dw-cat-shell', '--dw-cat-python_ai', '--dw-cat-containers', '--dw-cat-services', '--dw-cat-interactive', '--dw-cat-data', '--dw-link-explicit'].map(name => styles.getPropertyValue(name).trim());
     return Array.from({ length: count }, (_, index) => base[index % base.length]);
   }
 

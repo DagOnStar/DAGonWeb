@@ -33,6 +33,8 @@ Click a link to remove it. See the [workflow editor](workflow_editor.md) for the
 
 ### Interactive tasks
 
+The **Volumes & meta-workflows** category adds Volume tasks, which create or destroy an ad-hoc file-system volume that other tasks share as `workflow:///<task>/<volume>/...`, and Meta tasks, which run a Nextflow, Snakemake, Parsl, StreamFlow, CWL or command-line workflow unmodified. A reference ending in `?stream=<volume>` streams a producer's items to the consumer while the producer runs. See [Volumes, streams and meta-tasks](volumes_and_meta.md).
+
 The **DAGonWeb interactive** palette category adds Upload, Form, Table, Chart and Download tasks. Upload and Form pause the run until someone provides files or answers on the run page; Table, Chart and Download show results there. See [Interactive tasks](interactive_tasks.md).
 
 ### Assistant

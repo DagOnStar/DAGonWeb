@@ -173,7 +173,7 @@ def test_workflow_link_uri_contract():
 
 
 def test_every_task_type_has_a_palette_label():
-    expected_types = {"checkpoint", "batch", "slurm", "cloud", "docker", "kubernetes", "apptainer", "nomad", "llm", "native", "web", "faas", "iot", "agentic", "upload", "form", "table", "chart", "download"}
+    expected_types = {"checkpoint", "batch", "slurm", "cloud", "docker", "kubernetes", "apptainer", "nomad", "llm", "native", "web", "faas", "iot", "agentic", "meta", "volume", "upload", "form", "table", "chart", "download"}
     assert {task_type.value for task_type in TaskType} == expected_types
     assert set(TASK_TYPE_LABELS) == expected_types
 

@@ -4,23 +4,25 @@ DAGonWeb is a Flask/Bootstrap Progressive Web Application for designing, importi
 
 You draw a workflow on a canvas, DAGonWeb saves it as a standard DAGonStar task-map JSON document, and the DAGonStar runtime executes it on the server with `launch()` / `wait()`. Each run gets its own scratch directory, and you can browse and download every artifact from the browser.
 
-The project targets **DAGonStar 2.9.4** (pinned in [requirements.txt](requirements.txt)).
+The project targets **DAGonStar 3.0.0** (pinned in [requirements.txt](requirements.txt)).
 
 ![Workflow editor with a Batch diamond workflow, one explicit dependency, and the inspector open](docs/images/editor.png)
 
 ## Highlights
 
-- **All 14 DAGonStar task types, plus 5 DAGonWeb interactive types**:
+- **All 16 DAGonStar task types, plus 5 DAGonWeb interactive types**:
   - Shell and HPC: Batch, Slurm, Checkpoint.
   - Containers: Docker, Kubernetes, Apptainer, Nomad.
   - Cloud, web and devices: Cloud, FaaS, Web, IoT.
   - Python and AI: Native, LLM, Agentic.
+  - Volumes and meta-workflows: Volume (create or destroy an ad-hoc file-system volume) and Meta (run a Nextflow, Snakemake, Parsl, StreamFlow, CWL or command-line workflow unmodified) ([docs](docs/volumes_and_meta.md)).
   - DAGonWeb interactive: Upload, Form, Table, Chart, Download. They pause a run for files or form answers and show tables, charts and downloads on the run page, yet stay plain DAGonStar `batch` tasks in the document ([docs](docs/interactive_tasks.md)).
 - **LLM workflow assistant.** An agent with tools designs, edits and dry-runs the workflow as a draft, from a plain-language description; you apply the draft to the canvas. It works with OpenAI and any OpenAI-compatible endpoint ([docs](docs/assistant.md)).
 - **Generated from one registry.** The palette and the inspector forms come from [app/task_specs.py](app/task_specs.py), and so does the code that builds each runtime `DagonTask`.
 - **Data links and explicit dependencies.**
   - A data link is a `workflow:///task/path` reference. DAGonStar infers the edge from it and stages the file.
   - An explicit dependency is stored in DAGonStar `explicit_prevs`. It orders tasks without moving any data.
+  - A stream link is a reference with a `?stream` query (`workflow:///emit/numbers?stream=shared`). The consumer reads items while the producer still runs, through a shared ad-hoc volume. The canvas draws it as an animated dotted line.
 - **Portable emulation.** With this option, container, scheduler, cloud and LLM tasks run their commands locally, so every template works on a laptop before you configure a real back-end.
 - **Checkpoint resume.** Each run records a DAGonStar checkpoint file. **Resume** re-runs only the failed tasks and reuses the outputs that already completed.
 - **Live run monitoring.**
@@ -190,7 +192,7 @@ erDiagram
 | Category | Type | Notes |
 | --- | --- | --- |
 | Shell & HPC | Batch | Shell script on the DAGonWeb host. Named inputs become shell variables. |
-| | Slurm | `sbatch` job with partition, time, nodes/tasks, memory, and extra sbatch options. |
+| | Slurm | `sbatch` job with partition, time, nodes/tasks, memory, extra sbatch options, and an optional job-local BeeOND volume. |
 | | Checkpoint | Records producer outputs so a failed run can resume. |
 | Containers & orchestrators | Docker, Kubernetes, Apptainer, Nomad | The command runs inside the image. Under portable emulation it runs locally instead. |
 | Cloud, web & devices | Cloud | libcloud instance with a provider, flavour, SSH user and key options. |
@@ -200,6 +202,8 @@ erDiagram
 | Python & AI | Native | Python callable with staged inputs. Its requirements are installed into a per-run virtual environment. |
 | | LLM | OpenAI-compatible chat completion that uses `[llm.<name>]` profiles from `dagon.ini`. |
 | | Agentic | Bounded agent contract with requirements and coverage checks. It uses `[agent.*]` and `[agent_provider.*]` profiles. |
+| Volumes & meta-workflows | Volume | Creates an ad-hoc file-system volume (DAGonFS, Hercules, CAPIO, DynoStore) that other tasks share as `workflow:///<task>/<volume>/...`, or destroys it and stages results out. |
+| | Meta | Runs a workflow written for Nextflow, Snakemake, Parsl, StreamFlow, a CWL runner or any command-line engine, as one task. The definition can be written inline. |
 | DAGonWeb interactive | Upload, Form | Pause the run until a user uploads files or fills a form on the run page (headless: `--input` / `--form`). |
 | | Table, Chart, Download | Turn CSV/JSON results into a table, a Chart.js chart (plus SVG), or download buttons. |
 
@@ -257,6 +261,7 @@ flask --app wsgi cleanup-runs            # apply retention: runs, audit log, reg
 - [User manual](docs/user_manual.md)
 - [Workflow editor](docs/workflow_editor.md)
 - [Interactive tasks](docs/interactive_tasks.md)
+- [Volumes, streams and meta-tasks](docs/volumes_and_meta.md)
 - [Workflow assistant](docs/assistant.md)
 - [Import and export](docs/import_export.md)
 - [Execution model](docs/execution_model.md)

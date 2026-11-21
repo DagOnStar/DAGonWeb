@@ -43,7 +43,7 @@ browser ─TLS─▶ DAGonWeb container ──ssh alice@login (forced command)�
 
    ```bash
    python3 -m venv /opt/dagonweb/venv
-   /opt/dagonweb/venv/bin/pip install "dagonstar[docker,kubernetes] @ git+https://github.com/DagOnStar/dagonstar.git@a7e633feab5c28ec8624a16f1c95e5499ddc93d4"
+   /opt/dagonweb/venv/bin/pip install "dagonstar[docker,kubernetes] @ git+https://github.com/DagOnStar/dagonstar.git@f62ceea7757ae313ce8d7fc6130896c9e7e83326"
    install -d -o root -g root -m 0755 /opt/dagonweb/bin
    install -o root -g root -m 0755 hpc/dagonweb_runner.py /opt/dagonweb/bin/dagonweb-runner
    sed -i '1s|.*|#!/opt/dagonweb/venv/bin/python -I|' /opt/dagonweb/bin/dagonweb-runner

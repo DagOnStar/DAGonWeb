@@ -33,11 +33,11 @@
   const INPUT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
   const PATH_RE = /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)*$/;
   // Mirrors app.task_specs.WORKFLOW_REFERENCE.
-  const REFERENCE_RE = /workflow:\/\/([A-Za-z0-9_-]{0,80})\/([A-Za-z0-9_-]{1,80})\/([^\s;|&<>()]+)/g;
+  const REFERENCE_RE = /workflow:\/\/([A-Za-z0-9_-]{0,80})\/([A-Za-z0-9_-]{1,80})\/([^\s;|&<>()]+?)(?:\?(stream(?:=[A-Za-z0-9._-]+)?))?(?=[\s;|&<>()]|$)/g;
   const NODE_WIDTH = 180;
   const COMMAND_TYPES = new Set(['batch', 'slurm', 'checkpoint', 'cloud', 'docker', 'kubernetes', 'apptainer', 'nomad']);
   // Where a new data link stores its reference, per target task type.
-  const INPUT_FIELD = { llm: 'input_files', web: null };
+  const INPUT_FIELD = { llm: 'input_files', web: null, volume: 'stage_in' };
 
   let graph = { name: '', id: 0, tasks: [], links: [] };
   let selected = null;
@@ -60,7 +60,7 @@
 
   function references(value, input = 'input') {
     if (typeof value === 'string') {
-      return [...value.matchAll(REFERENCE_RE)].map(match => ({ workflow: match[1], source: match[2], path: match[3], input }));
+      return [...value.matchAll(REFERENCE_RE)].map(match => ({ workflow: match[1], source: match[2], path: match[3], stream: Boolean(match[4]), input }));
     }
     if (Array.isArray(value)) return value.flatMap(item => references(item, input));
     if (value && typeof value === 'object') {
@@ -83,7 +83,7 @@
         const key = `${ref.source}|${target.name}`;
         if (ref.source === target.name || seen.has(key)) return;
         seen.add(key);
-        links.push({ kind: 'data', source: ref.source, target: target.name, path: ref.path, input: ref.input, missing: !findTask(ref.source) });
+        links.push({ kind: 'data', source: ref.source, target: target.name, path: ref.path, stream: ref.stream, input: ref.input, missing: !findTask(ref.source) });
       });
       (target.explicit_prevs || []).forEach(source => {
         const key = `${source}|${target.name}`;
@@ -105,6 +105,19 @@
     if (task.task_type === 'native' || task.task_type === 'faas') addValues(config.outputs, 'outputs/');
     if (['iot', 'agentic', 'web'].includes(task.task_type)) addValues(config.outputs);
     if (task.task_type === 'llm' && config.output_file) files.add(config.output_file);
+    if (task.task_type === 'meta') {
+      Object.values(config.outputs || {}).forEach(value => {
+        const path = typeof value === 'string' ? value : value?.path;
+        if (typeof path === 'string' && PATH_RE.test(path)) files.add(`outputs/${path}`);
+      });
+    }
+    if (task.task_type === 'volume') {
+      if ((config.action || 'create') === 'create' && PATH_RE.test(config.volume || '')) {
+        files.add(`${config.volume}/`);
+        Object.keys(config.stage_in || {}).forEach(path => { if (PATH_RE.test(path)) files.add(`${config.volume}/${path}`); });
+      }
+      if (config.action === 'destroy') Object.keys(config.stage_out || {}).forEach(path => { if (PATH_RE.test(path)) files.add(path); });
+    }
     // DAGonWeb interactive kinds always write these files.
     const fixed = {
       upload: config.multiple ? [] : [`outputs/${config.save_as || 'data.csv'}`],
@@ -119,7 +132,7 @@
         if (PATH_RE.test(match[1])) files.add(match[1]);
       }
     }
-    graph.links.filter(link => link.source === task.name && link.path).forEach(link => files.add(link.path));
+    graph.links.filter(link => link.source === task.name && link.path && !link.stream).forEach(link => files.add(link.path));
     return [...files];
   }
 
@@ -299,7 +312,8 @@
     const ns = 'http://www.w3.org/2000/svg';
     svg.innerHTML = `<defs>
       <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--dw-link)"/></marker>
-      <marker id="arrowExplicit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--dw-link-explicit)"/></marker></defs>`;
+      <marker id="arrowExplicit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--dw-link-explicit)"/></marker>
+      <marker id="arrowStream" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--dw-link-stream)"/></marker></defs>`;
     graph.links.forEach(link => {
       const a = findTask(link.source);
       const b = findTask(link.target);
@@ -312,13 +326,13 @@
       const title = document.createElementNS(ns, 'title');
       title.textContent = link.kind === 'explicit'
         ? `${link.source} → ${link.target} (explicit dependency). Click to remove.`
-        : `${link.target}.${link.input} ← workflow:///${link.source}/${link.path}. Click to remove.`;
+        : `${link.target}.${link.input} ← workflow:///${link.source}/${link.path}${link.stream ? ' (streamed while the producer runs)' : ''}. Click to remove.`;
       hit.appendChild(title);
       if (editable) hit.addEventListener('click', event => { event.stopPropagation(); removeLink(link); });
       const path = document.createElementNS(ns, 'path');
-      path.setAttribute('class', `link-line ${link.kind === 'explicit' ? 'explicit' : ''} ${selected && (link.source === selected || link.target === selected) ? 'highlight' : ''}`);
+      path.setAttribute('class', `link-line ${link.kind === 'explicit' ? 'explicit' : ''} ${link.stream ? 'stream' : ''} ${selected && (link.source === selected || link.target === selected) ? 'highlight' : ''}`);
       path.setAttribute('d', d);
-      path.setAttribute('marker-end', `url(#${link.kind === 'explicit' ? 'arrowExplicit' : 'arrow'})`);
+      path.setAttribute('marker-end', `url(#${link.kind === 'explicit' ? 'arrowExplicit' : link.stream ? 'arrowStream' : 'arrow'})`);
       group.append(hit, path);
       svg.appendChild(group);
     });
@@ -524,6 +538,7 @@
       : '';
     inspector.innerHTML = `<p class="text-body-secondary">Select a task to edit it.</p>${counts}
       <div class="small text-body-secondary"><span class="d-inline-block border-top border-2 me-1" style="width:24px;border-color:var(--dw-link)!important"></span>data link (<code>workflow:///</code>)<br>
+      <span class="d-inline-block border-top border-2 me-1" style="width:24px;border-style:dotted!important;border-color:var(--dw-link-stream)!important"></span>stream (<code>?stream</code>)<br>
       <span class="d-inline-block border-top border-2 me-1" style="width:24px;border-style:dashed!important;border-color:var(--dw-link-explicit)!important"></span>explicit dependency (<code>explicit_prevs</code>)</div>`;
   }
 
@@ -618,7 +633,7 @@
     const outgoing = graph.links.filter(link => link.source === task.name);
     const others = graph.tasks.filter(other => other.name !== task.name);
     const producers = others.flatMap(other => producedFiles(other).map(path => `workflow:///${other.name}/${path}`));
-    const linkItem = (link, otherName) => `<li class="small">${link.kind === 'explicit' ? '<span class="badge text-bg-warning">after</span>' : '<span class="badge text-bg-secondary">data</span>'} <code>${escapeHtml(otherName)}</code>${link.kind === 'data' ? ` <span class="text-body-secondary mono">${escapeHtml(link.path)}</span>` : ''}${link.missing ? ' <span class="text-danger">missing task</span>' : ''}</li>`;
+    const linkItem = (link, otherName) => `<li class="small">${link.kind === 'explicit' ? '<span class="badge text-bg-warning">after</span>' : (link.stream ? '<span class="badge text-bg-info">stream</span>' : '<span class="badge text-bg-secondary">data</span>')} <code>${escapeHtml(otherName)}</code>${link.kind === 'data' ? ` <span class="text-body-secondary mono">${escapeHtml(link.path)}</span>` : ''}${link.missing ? ' <span class="text-danger">missing task</span>' : ''}</li>`;
 
     inspector.innerHTML = `
       <div class="d-flex align-items-center gap-2 mb-2 cat-${spec.category}"><span class="type-icon" aria-hidden="true">${escapeHtml(spec.icon)}</span>
@@ -647,6 +662,10 @@
       </div>`;
 
     inspector.dataset.snapshot = '';
+    applyFieldVisibility(spec);
+    spec.fields.filter(field => field.kind === 'select').forEach(field => {
+      inspector.querySelector(`#cfg_${CSS.escape(field.key)}`)?.addEventListener('change', () => applyFieldVisibility(spec));
+    });
     inspector.querySelector('#applyInspector').addEventListener('click', () => applyInspector(task));
     inspector.querySelector('#deleteTask').addEventListener('click', () => deleteTask(task.name));
     inspector.querySelector('#duplicateTask').addEventListener('click', () => duplicateTask(task.name));
@@ -655,6 +674,20 @@
     inspector.addEventListener('focusin', rememberFocus);
     upgradeCodeFields(task);
     inspector.dataset.snapshot = inspectorSnapshot();
+  }
+
+  /** Show only the fields whose ``show_when`` condition holds (for example Volume create/destroy). */
+  function applyFieldVisibility(spec) {
+    spec.fields.filter(field => field.show_when).forEach(field => {
+      const element = inspector.querySelector(`#cfg_${CSS.escape(field.key)}`);
+      const wrapper = element?.closest('.mb-2, .form-check');
+      if (!wrapper) return;
+      wrapper.hidden = !Object.entries(field.show_when).every(([key, values]) => {
+        const control = inspector.querySelector(`#cfg_${CSS.escape(key)}`);
+        const fallback = spec.fields.find(item => item.key === key)?.options?.[0];
+        return values.includes(control ? control.value : fallback);
+      });
+    });
   }
 
   let lastFocused = null;
@@ -683,8 +716,20 @@
 
   function fieldLanguage(field) {
     if (field.language) return field.language;
+    if (field.kind === 'code' && field.mode === 'workflow') return workflowLanguage(inspector.querySelector('#cfg_workflow')?.value);
     if (field.kind === 'code') return field.mode === 'python' ? 'python' : 'shell';
     return LANGUAGE[field.kind] || 'plaintext';
+  }
+
+  /** Editor language of a Meta workflow definition, from its file name. */
+  function workflowLanguage(file) {
+    const name = String(file || '').toLowerCase();
+    if (name.endsWith('.py') || name === 'snakefile' || name.endsWith('.smk')) return 'python';
+    if (/\.(cwl|ya?ml)$/.test(name)) return 'yaml';
+    if (name.endsWith('.sh')) return 'shell';
+    if (name.endsWith('.nf') || name.endsWith('.config')) return 'java';
+    if (name.endsWith('.json')) return 'json';
+    return 'plaintext';
   }
 
   /** Names declared by a mapping or JSON field currently shown in the Inspector. */
@@ -850,6 +895,24 @@
     if (type === 'faas' && (!config.provider || !config.function)) throw new Error('FaaS tasks need a provider and a function.');
     if (type === 'agentic' && (!Array.isArray(config.requirements) || !config.requirements.length)) throw new Error('Agentic tasks need at least one requirement.');
     if (type === 'web' && !/^https?:\/\//.test(config.url || '')) throw new Error('Web tasks need an http(s) URL.');
+    if (type === 'volume') {
+      if ((config.action || 'create') === 'create') {
+        if (!config.provider) throw new Error('Choose the volume provider.');
+        if (config.volume && !/^[A-Za-z0-9._-]+$/.test(config.volume)) throw new Error('Volume names may contain letters, digits, ".", "_" and "-".');
+        if (config.export && !INPUT_RE.test(config.export)) throw new Error('The export variable must be a shell identifier.');
+      } else if (!/^workflow:\/\/\/[A-Za-z0-9_-]{1,80}\/[A-Za-z0-9._-]+$/.test(config.volume || '')) {
+        throw new Error('A destroy task names its volume as workflow:///<create task>/<volume>.');
+      }
+    }
+    if (type === 'meta') {
+      if (!config.engine) throw new Error('Choose the meta-task engine.');
+      if (!String(config.workflow || '').trim()) throw new Error('Set the workflow definition (a file name, path or engine-resolved name).');
+      if (String(config.workflow_source || '').trim() && !/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}$/.test(config.workflow)) {
+        throw new Error('With an inline source, the workflow definition must be a plain file name such as main.nf.');
+      }
+      if (String(config.workflow_source || '').length > 250000) throw new Error('The workflow source must be 250 KB or smaller.');
+      Object.keys(config.inputs || {}).forEach(key => { if (!INPUT_RE.test(key)) throw new Error('Meta inputs need identifier names.'); });
+    }
   }
 
   // ------------------------------------------------------------------ connect dialog
